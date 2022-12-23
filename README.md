@@ -15,7 +15,7 @@ You'll need a few programs installed and configured.
 
 ### Prerequisites
 
-* vJoy [https://github.com/shauleiz/vJoy.git](https://github.com/shauleiz/vJoy.git)
+* vJoy [https://github.com/jshafer817/vJoy.git](https://github.com/jshafer817/vJoy.git)
 * Joystick Gremlin [https://whitemagic.github.io/JoystickGremlin/](https://whitemagic.github.io/JoystickGremlin/)
 
 ### Installation
