@@ -17,6 +17,7 @@ You'll need a few programs installed and configured.
 
 * vJoy [https://github.com/jshafer817/vJoy.git](https://github.com/jshafer817/vJoy.git)
 * Joystick Gremlin [https://whitemagic.github.io/JoystickGremlin/](https://whitemagic.github.io/JoystickGremlin/)
+* HidHide [https://github.com/ViGEm/HidHide.git](https://github.com/ViGEm/HidHide.git)
 
 ### Installation
 
@@ -36,12 +37,15 @@ You'll need a few programs installed and configured.
 - Configure the number of simultaneous button presses that should be considered a Ghost Input
 - Configure the amount of ticks during which a button press should be evaluated
 
-### Multiple Instances
+#### Multiple Instances
 You can create multiple instances of the plugin for each physical device and/or each JG Mode you need to filter
 - Click the plus (+) button on the plugin
 - Change the GUID of the physical device, the index of the vJoy device, and the Mode that should be used
 
-### Notes
+### vJoy
 By default, this plugin will map every button (1-17 on my X56 Stick and 1-35 on my X56 throttle) to the corresponding button on a vJoy device. It is very similar to JG's "1-to-1 Mapping" preset. Make sure vJoy is configured with enough buttons for your device(s).
 
 You can also add other mappings or JG configurations in the normal gui, and they should work on top of this plugin mapping.
+
+### HidHide
+HidHide allows you to hide your <i>physical</i> joystick from certain programs (such as your game). Configuring that will allow you to only pass vJoy inputs to your game, and thus filter out ghost inputs.
