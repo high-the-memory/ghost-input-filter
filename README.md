@@ -47,5 +47,5 @@ By default, this plugin will map every button (1-17 on my X56 Stick and 1-35 on 
 
 You can also add other mappings or JG configurations in the normal gui, and they should work on top of this plugin mapping.
 
-#### HidHide
+### HidHide
 HidHide allows you to hide your <i>physical</i> joystick from certain programs (such as your game). Configuring that will allow you to only pass vJoy inputs to your game, and thus filter out ghost inputs.
