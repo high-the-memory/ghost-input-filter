@@ -16,7 +16,7 @@ ui_mode = ModeVariable("*** Apply Filtering to", "The mode to apply this filteri
 ui_device_name = StringVariable("Physical Device Label", "What to call this device in the log?", "Stick")
 ui_physical_guid = StringVariable("  -  Physical Device GUID", "Copy and paste from Tools > Device Information", "")
 ui_virtual_guid = StringVariable("  -  Virtual Device GUID", "Copy and paste from Tools > Device Information", "")
-ui_button_remapping = BoolVariable("Button Remapping Enabled?", "Actively remap button input?", True)
+ui_button_remapping = BoolVariable("Button Remapping Enabled?", "Actively remap button input? Required for filtering ghost inputs", True)
 ui_button_filtering = BoolVariable("  -  Button Filtering Enabled?", "Actively filter ghost input?", True)
 ui_button_threshold = IntegerVariable("       -  Button Limit Threshold",
                                       "How many *buttons* pressed at once (within the Monitoring Timespan) constitute a Ghost Input (on a single device)? Default: 2",
@@ -24,11 +24,11 @@ ui_button_threshold = IntegerVariable("       -  Button Limit Threshold",
 ui_button_timespan = IntegerVariable("       -  Button Monitoring Timespan",
                                      "How many ticks (16.66ms) to wait after a button press before checking for ghost input? Default: 5",
                                      5, 1, 20)
-ui_axis_remapping = BoolVariable("Axis Remapping Enabled?", "Actively remap axes?", True)
+ui_axis_remapping = BoolVariable("Axis Remapping Enabled?", "Actively remap axes? Disable if remapping them through JG GUI", True)
 ui_axis_curve = BoolVariable("  -  Smooth Response Curve?",
                              "Adds an S curve to the vjoy output, otherwise linear",
                              True)
-ui_hat_remapping = BoolVariable("Hat Mapping Enabled?", "Actively remap hats?", True)
+ui_hat_remapping = BoolVariable("Hat Remapping Enabled?", "Actively remap hats? Disable if remapping them through JG GUI", True)
 ui_logging_enabled = BoolVariable("Enable Logging?", "Output useful debug info to log", True)
 ui_logging_is_verbose = BoolVariable("  -  Verbose Logging",
                                      "Log every legitimate button press (instead of just Ghost Inputs)",
