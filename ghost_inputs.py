@@ -5,13 +5,19 @@ import time
 from collections import defaultdict
 #gremlin (user plugin) imports
 import gremlin
-from gremlin.util import log
+import gremlin.util
 #gremlin (developer) improts
 from gremlin.joystick_handling import vjoy_id_from_guid
 from gremlin.user_plugin import *
 import uuid
 
-#helper function (copied from JoystickGremlin-develop/gremlin/util.py since they don't seem to be exposed for user_plugins on production)
+#helper functions
+
+#write to log (optionally as two columns)
+def log(str1, str2=""):
+    gremlin.util.log(((str1 + " ").ljust(50,".") + " " + str2) if str2 else str1)
+
+# (copied from JoystickGremlin-develop/gremlin/util.py since they don't seem to be exposed for user_plugins on production)
 def parse_guid(value: str) -> dill.GUID:
     """Reads a string GUID representation into the internal data format.
 
@@ -98,13 +104,14 @@ class Debugger:
     def log(self, msg, **args):
         if msg is "ready":
             # output general setup info
-            log("Ghost Input filtering on Profile [" + args['device'].mode + "]")
-            log("  for Physical Device \"" + args['device'].name + "\" [" + str(args['device'].physical_guid) + "]")
-            log("  mapping to Virtual Device " + str(args['device'].vjoy_id))
+            log("/////////////////////////////////////////////////////////////////////////////////////////////////////////////////")
+            log("Ghost Input Filtering", "on Profile [" + args['device'].mode + "]")
+            log("  for Physical Device \"" + args['device'].name + "\"", str(args['device'].physical_guid))
+            log("  mapping to Virtual Device " + str(args['device'].vjoy_id), str(args['device'].virtual_guid))
             if args['device'].button_filtering:
-                log("    ... Button Filtering enabled")
+                log("   ... Button Filtering enabled")
             if self.is_verbose:
-                log("    ... Verbose logging enabled")
+                log("   ... Verbose logging enabled")
 
         elif msg is "ghost":
             # increment counters
@@ -124,23 +131,25 @@ class Debugger:
 
         elif msg is "summary":
             # output a summary
-            log("----------------------------------------------")
-            log("   Summary for (" + args['device'].mode + ") \"" + args['device'].name + "\"")
-            log("   *      Total Inputs Allowed          :  " + str(self.counts['total_allowed']))
-            log("   *      Total Ghost Inputs Blocked  :  " + str(self.counts['total_blocked']))
-            log("   * ")
-            log("   *      Elapsed Time        :  " + str(self.summary['elapsed_time']) + " seconds" + "    (" + str(round(self.summary['elapsed_time'] / 60,1)) + " minutes)    (" + str(round(self.summary['elapsed_time'] / 3600,1)) + " hours)")
-            log("   *      Ghost Input %      :  " + str(round(self.summary['percentage'], 3)) + "%")
-            log("   *      Ghost Input rate    :  " + str(round(self.summary['per_minute'], 3)) + "/min    (" + str(
+            log("//////////////////////////////////////////////////////////////////")
+            log("   Summary for \"" + args['device'].name + "\"", "on Profile ["+args['device'].mode + "]")
+            log("   |      Total Inputs Allowed", str(self.counts['total_allowed']))
+            log("   |      Total Ghost Inputs Blocked", str(self.counts['total_blocked']))
+            log("   | ")
+            log("   |      Elapsed Time", str(self.summary['elapsed_time']) + " seconds" + "   (" + str(round(self.summary['elapsed_time'] / 60, 1)) + " minutes)    (" + str(round(self.summary['elapsed_time'] / 3600, 1)) + " hours)")
+            log("   |      Ghost Input %", str(round(self.summary['percentage'], 3)) + "%")
+            log("   |      Ghost Input rate", str(round(self.summary['per_minute'], 3)) + "/min   (" + str(
                 round(self.summary['per_hour'])) + "/hr)")
             if self.counts['total_blocked'] > 0:
-                log("   * ")
-                log("   *      By Button")
-                for btn, cnt in self.counts['by_button'].items():
-                    log("   *            (Joy " + str(btn) + ")         :  " + str(cnt))
-                log("   *      By Simultaneity")
-                for simul, cnt in self.counts['by_simultaneity'].items():
-                    log("   *            (" + str(simul) + " at once)     :  " + str(cnt))
+                log("   | ")
+                log("   |      By Button")
+                #output how many times each button was ghosted, starting with the most common one
+                for btn, cnt in sorted(self.counts['by_button'].items(), key=lambda item: item[1], reverse=True):
+                    log("   |            (Joy " + str(btn) + ")", str(cnt))
+                log("   |      By Simultaneity")
+                #output how many buttons were pressed at the same time, starting with the most common number
+                for simul, cnt in sorted(self.counts['by_simultaneity'].items(), key=lambda item: item[1], reverse=True):
+                    log("   |            (" + str(simul) + " at once)", str(cnt))
             self.summary['recent'] = False
 
         else:
