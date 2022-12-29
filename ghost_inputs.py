@@ -1,21 +1,51 @@
-import gremlin
+#python imports
 import threading
 import math
 import time
-from gremlin.user_plugin import *
-from gremlin.util import log
 from collections import defaultdict
+#gremlin (user plugin) imports
+import gremlin
+from gremlin.util import log
+#gremlin (developer) improts
+from gremlin.joystick_handling import vjoy_id_from_guid
+from gremlin.user_plugin import *
+import uuid
+
+#helper function (copied from JoystickGremlin-develop/gremlin/util.py since they don't seem to be exposed for user_plugins)
+def parse_guid(value: str) -> dill.GUID:
+    """Reads a string GUID representation into the internal data format.
+
+    This transforms a GUID of the form {B4CA5720-11D0-11E9-8002-444553540000}
+    into the underlying raw and exposed objects used within Gremlin.
+
+    Args:
+        value: the string representation of the GUID
+
+    Returns:
+        dill.GUID object representing the provided value
+    """
+    try:
+        tmp = uuid.UUID(value)
+        raw_guid = dill._GUID()
+        raw_guid.Data1 = int.from_bytes(tmp.bytes[0:4], "big")
+        raw_guid.Data2 = int.from_bytes(tmp.bytes[4:6], "big")
+        raw_guid.Data3 = int.from_bytes(tmp.bytes[6:8], "big")
+        for i in range(8):
+            raw_guid.Data4[i] = tmp.bytes[8 + i]
+
+        return dill.GUID(raw_guid)
+    except (ValueError, AttributeError) as _:
+        log(f"Failed parsing GUID from value '{value}'")
+
+
 
 # Plugin UI Configuration
 ui_mode = ModeVariable("Apply Filtering to", "The mode to apply this filtering to")
 ui_is_verbose = BoolVariable("Verbose Logging", "Log every legitimate button press (instead of just Ghost Inputs)",
                              False)
-ui_device_name = StringVariable("Physical Device Name", "What to call this device in the log?", "Stick")
-# ui_physical_device = StringVariable("Physical Device GUID", "Copy and paste from Tools > Device Information")
-ui_physical_device = PhysicalInputVariable("Physical Device/Summary Button", "Press the button on the device that you want to use (and also to generate a summary in the log)",[gremlin.common.InputType.JoystickButton])
-ui_virtual_device = IntegerVariable("Virtual Device ID",
-                                    "Specify the vJoy device to map the stick to (based on the order of their indexing in Tools > Device Information",
-                                    1, 1, 16)
+ui_device_name = StringVariable("Physical Device Label", "What to call this device in the log?", "Stick")
+ui_physical_guid = StringVariable("Physical Device GUID", "Copy and paste from Tools > Device Information", "")
+ui_virtual_guid = StringVariable("Virtual Device GUID", "Copy and paste from Tools > Device Information", "")
 ui_button_filtering = BoolVariable("Button Filtering Enabled?", "Actively filter ghost input?", True)
 ui_button_threshold = IntegerVariable("Button Limit Threshold",
                                       "How many *buttons* pressed at once (within the Monitoring Timespan) constitute a Ghost Input (on a single device)? Default: 2",
@@ -23,11 +53,15 @@ ui_button_threshold = IntegerVariable("Button Limit Threshold",
 ui_button_timespan = IntegerVariable("Button Monitoring Timespan",
                                      "How many ticks (16.66ms) to wait after a button press before checking for ghost input? Default: 5",
                                      5, 1, 20)
+ui_summary_key = StringVariable("Generate a Summary with Key", "Which keyboard key to press to get a Ghost Input summary breakdown in the log?","f8")
+
 
 
 class Debugger:
-    def __init__(self, is_verbose):
+    def __init__(self, mode, is_verbose, summary_key):
+        self.mode = mode
         self.is_verbose = is_verbose
+        self.summary_key = summary_key
         self.summary = {
             'period': {
                 'ghost': 10,
@@ -47,9 +81,16 @@ class Debugger:
             'by_simultaneity': defaultdict(int)
         }
 
+        # log a summary every time summary button is pressed (user configurable)
+        @gremlin.input_devices.keyboard(self.summary_key, self.mode)
+        def summary_callback(event):
+            if event.is_pressed:
+                self.summarize()
+
     def update(self):
         self.counts['total'] = self.counts['total_blocked'] + self.counts['total_allowed']
-        self.summary['percentage'] = (self.counts['total_blocked'] / self.counts['total']) * 100 if self.counts['total'] > 0 else 0.0
+        self.summary['percentage'] = (self.counts['total_blocked'] / self.counts['total']) * 100 if self.counts[
+                                                                                                        'total'] > 0 else 0.0
         self.summary['elapsed_time'] = time.mktime(time.localtime()) - time.mktime(self.summary['start_time'])
         self.summary['per_minute'] = (self.counts['total_blocked'] / self.summary['elapsed_time']) * 60
         self.summary['per_hour'] = self.summary['per_minute'] * 60
@@ -58,7 +99,7 @@ class Debugger:
         if msg is "ready":
             # output general setup info
             log("Ghost Input filtering on Profile [" + args['device'].mode + "]")
-            log("  for Physical Device \"" + args['device'].name + "\" [" + str(args['device'].device_guid) + "]")
+            log("  for Physical Device \"" + args['device'].name + "\" [" + str(args['device'].physical_guid) + "]")
             log("  mapping to Virtual Device " + str(args['device'].vjoy_id))
             if args['device'].button_filtering:
                 log("    ... Button Filtering enabled")
@@ -83,41 +124,42 @@ class Debugger:
 
         elif msg is "summary":
             # output a summary
-            log("[----------------------------------------------]")
+            log("----------------------------------------------")
             log("   Summary for (" + args['device'].mode + ") \"" + args['device'].name + "\"")
-            log("      Total Inputs Allowed          :  " + str(self.counts['total_allowed']))
-            log("      Total Ghost Inputs Blocked :  " + str(self.counts['total_blocked']))
-            log(" ")
-            log("      Elapsed Time        :  " + str(self.summary['elapsed_time']) + " seconds")
-            log("      Ghost Input %      :  " + str(round(self.summary['percentage'],3))+"%")
-            log("      Ghost Input rate    :  " + str(round(self.summary['per_minute'],3)) + "/min    (" + str(round(self.summary['per_hour'])) + "/hr)")
+            log("   *      Total Inputs Allowed          :  " + str(self.counts['total_allowed']))
+            log("   *      Total Ghost Inputs Blocked  :  " + str(self.counts['total_blocked']))
+            log("   * ")
+            log("   *      Elapsed Time        :  " + str(self.summary['elapsed_time']) + " seconds" + "    (" + str(round(self.summary['elapsed_time'] / 60,1)) + " minutes)    (" + str(round(self.summary['elapsed_time'] / 3600,1)) + " hours)")
+            log("   *      Ghost Input %      :  " + str(round(self.summary['percentage'], 3)) + "%")
+            log("   *      Ghost Input rate    :  " + str(round(self.summary['per_minute'], 3)) + "/min    (" + str(
+                round(self.summary['per_hour'])) + "/hr)")
             if self.counts['total_blocked'] > 0:
-                log(" ")
-                log("      By Button")
+                log("   * ")
+                log("   *      By Button")
                 for btn, cnt in self.counts['by_button'].items():
-                    log("            (Joy " + str(btn) + ")         :  " + str(cnt))
-                log("      By Simultaneity")
+                    log("   *            (Joy " + str(btn) + ")         :  " + str(cnt))
+                log("   *      By Simultaneity")
                 for simul, cnt in self.counts['by_simultaneity'].items():
-                    log("            (" + str(simul) + " at once)     :  " + str(cnt))
-            log("[----------------------------------------------]")
+                    log("   *            (" + str(simul) + " at once)     :  " + str(cnt))
             self.summary['recent'] = False
 
         else:
             # output the message
             log(msg)
 
-    def summarize(self, device):
+    def summarize(self):
         if not self.summary['recent']:
+            global filtered_device
             self.summary['recent'] = True
             self.update()
-            self.log("summary", device=device)
+            self.log("summary", device=filtered_device)
 
 
 # class for each physical joystick device, for filtering and mapping
 class FilteredDevice:
     def __init__(self,
                  # device
-                 physical_device, name, mode, vjoy_id,
+                 physical_guid, virtual_guid, name, mode,
                  # buttons
                  button_filtering, button_timespan, button_threshold,
                  # variables
@@ -126,9 +168,9 @@ class FilteredDevice:
 
         self.name = name
         self.mode = mode
-        self.device_guid = physical_device.device_guid
-        self.input_id = physical_device.input_id
-        self.vjoy_id = vjoy_id
+        self.physical_guid = physical_guid
+        self.virtual_guid = virtual_guid
+        self.vjoy_id = vjoy_id_from_guid(parse_guid(str(virtual_guid)))
         self.tick_len = tick_len
 
         self.button_filtering = button_filtering
@@ -141,7 +183,7 @@ class FilteredDevice:
         self.block_count = 0
 
         # create the decorator
-        self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.device_guid), self.mode)
+        self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
 
         # for each button on the device
         for i in range(1, self.max_buttons + 1):
@@ -156,13 +198,6 @@ class FilteredDevice:
                 # wait the first half of the delay timespan (set number of ticks), then check for ghost inputs
                 defer(self.button_timespan[0], self.filter_the_button, [event, vjoy, joy])
 
-        # log a summary every time summary button is pressed (user configurable)
-        @self.decorator.button(self.input_id)
-        def summary_callback(event,vjoy,joy):
-            if event.is_pressed:
-                global debugger
-                debugger.summarize(self)
-            
         # Log that device is ready
         debugger.log("ready", device=self)
 
@@ -196,7 +231,8 @@ class FilteredDevice:
             try:
                 vjoy[self.vjoy_id].button(event.identifier).is_pressed = still_pressed
             except:
-                debugger.log("Error trying to set vjoy[" + str(self.vjoy_id)+"].button("+str(event.identifier)+")")
+                debugger.log(
+                    "Error trying to set vjoy[" + str(self.vjoy_id) + "].button(" + str(event.identifier) + ")")
             # log legitimate press
             if still_pressed:
                 debugger.log("legitimate", event=event, device=self)
@@ -220,22 +256,23 @@ def defer(time, func, args=[]):
 # grab user configuration
 name = ui_device_name.value
 mode = ui_mode.value
-physical_device = ui_physical_device #.value
-vjoy_id = ui_virtual_device.value
+physical_guid = ui_physical_guid.value
+virtual_guid = ui_virtual_guid.value
 is_verbose = bool(ui_is_verbose.value)  # joystick gremlin has an issue with BoolVariable persistance(?)
 button_filtering = bool(ui_button_filtering.value)  # joystick gremlin has an issue with BoolVariable persistance(?)
 button_timespan = ui_button_timespan.value
 button_threshold = ui_button_threshold.value
+summary_key = ui_summary_key.value
 
-if physical_device.device_guid:
+if physical_guid and virtual_guid:
     # Initialize debugging logging
-    debugger = Debugger(is_verbose)
+    debugger = Debugger(mode, is_verbose, summary_key)
     # Initialize filtered device (which creates decorators to listen for and filter input)
     filtered_device = FilteredDevice(
-        physical_device,
+        physical_guid,
+        virtual_guid,
         name,
         mode,
-        vjoy_id,
         button_filtering,
         button_timespan,
         button_threshold
