@@ -11,7 +11,7 @@ from gremlin.joystick_handling import vjoy_id_from_guid
 from gremlin.user_plugin import *
 import uuid
 
-#helper function (copied from JoystickGremlin-develop/gremlin/util.py since they don't seem to be exposed for user_plugins)
+#helper function (copied from JoystickGremlin-develop/gremlin/util.py since they don't seem to be exposed for user_plugins on production)
 def parse_guid(value: str) -> dill.GUID:
     """Reads a string GUID representation into the internal data format.
 
@@ -232,7 +232,7 @@ class FilteredDevice:
                 vjoy[self.vjoy_id].button(event.identifier).is_pressed = still_pressed
             except:
                 debugger.log(
-                    "Error trying to set vjoy[" + str(self.vjoy_id) + "].button(" + str(event.identifier) + ")")
+                    "Error trying to update vjoy[" + str(self.vjoy_id) + "].button(" + str(event.identifier) + ") state  [Device \""+ self.name +"\" on Profile \"" + self.mode + "\"]")
             # log legitimate press
             if still_pressed:
                 debugger.log("legitimate", event=event, device=self)
