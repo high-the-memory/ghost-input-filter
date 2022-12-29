@@ -42,7 +42,7 @@ You can create multiple instances of the plugin for each physical device and/or 
 - Change the GUIDs of the physical and virtual devices, and the Mode that should be used
 
 ### vJoy
-By default, this plugin will map every button (1-17 on my X56 Stick and 1-35 on my X56 throttle) to the corresponding button on a vJoy device. It is very similar to JG's "1-to-1 Mapping" preset. Make sure vJoy is configured with enough buttons for your device(s).
+By default, this plugin will map every internal button (1-17 on my X56 Stick and 1-36 on my X56 throttle) to the corresponding button on a vJoy device. It is very similar to JG's "1-to-1 Mapping" preset. It will also map all axes and hats by default. Make sure vJoy is configured with enough buttons and hats for your device(s) (and ideally keep all axes on, since JG doesn't always map axes 1:1).
 
 You can also add other mappings or JG configurations in the normal gui, and they should work on top of this plugin mapping.
 
