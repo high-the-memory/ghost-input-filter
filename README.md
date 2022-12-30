@@ -15,15 +15,21 @@ You'll need a few programs installed and configured.
 
 ### Prerequisites
 
+* Logitech Drivers [https://support.logi.com/hc/en-us/articles/360024844133--Downloads-X56-Space-Flight-H-O-T-A-S-](https://support.logi.com/hc/en-us/articles/360024844133--Downloads-X56-Space-Flight-H-O-T-A-S-)
+    * First entry under **Windows 10**
 * vJoy [https://github.com/jshafer817/vJoy.git](https://github.com/jshafer817/vJoy.git)
-* Joystick Gremlin [https://whitemagic.github.io/JoystickGremlin/](https://whitemagic.github.io/JoystickGremlin/)
 * HidHide [https://github.com/ViGEm/HidHide.git](https://github.com/ViGEm/HidHide.git)
+* Joystick Gremlin [https://whitemagic.github.io/JoystickGremlin/](https://whitemagic.github.io/JoystickGremlin/)
 
 ### Installation
 
-1. Download ghost_inputs.py
+1. Download ghost-input-filter.py
 2. Open Joystick Gremlin > Plugins tab
-3. Add plugin > ghost_inputs.py
+3. Add plugin > ghost-input-filter.py
+4. Don't forget to **File > Save Profile**
+
+(For an in-depth rundown of the steps for these different programs, check out the [Installation Guide](https://github.com/high-the-memory/ghost-input-filter/wiki/Installation-Guide) wiki)
+
 
 <!-- USAGE EXAMPLES -->
 ## Usage
