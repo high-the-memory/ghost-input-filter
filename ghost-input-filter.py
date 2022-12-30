@@ -273,13 +273,10 @@ class FilteredDevice:
         else:
             # otherwise, get the current state (after this much delay)
             still_pressed = joy[event.device_guid].button(event.identifier).is_pressed
-            # and update the virtual joystick
-            try:
-                vjoy[self.vjoy_id].button(event.identifier).is_pressed = still_pressed
-            except:
-                debugger.log(
-                    "Error trying to update vjoy[" + str(self.vjoy_id) + "].button(" + str(
-                        event.identifier) + ") state  [Device \"" + self.name + "\" on Profile \"" + self.mode + "\"]")
+
+            # update the virtual joystick (other functions could decorate this and execute here)
+            self.trigger_the_button(event, vjoy, joy, still_pressed)
+
             # log legitimate press
             if still_pressed:
                 debugger.log("legitimate", event=event, device=self)
@@ -289,6 +286,14 @@ class FilteredDevice:
         if event.is_pressed:
             defer(self.button_timespan[1], self.end_button_monitoring)
 
+    # update the virtual joystick
+    def trigger_the_button(self, event, vjoy, joy, new_value):
+        try:
+            vjoy[self.vjoy_id].button(event.identifier).is_pressed = new_value
+        except:
+            debugger.log(
+                "Error trying to update vjoy[" + str(self.vjoy_id) + "].button(" + str(
+                    event.identifier) + ") state  [Device \"" + self.name + "\" on Profile \"" + self.mode + "\"]")
 
 # helper functions
 def defer(time, func, args=[]):
