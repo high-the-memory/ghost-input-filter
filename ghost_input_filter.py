@@ -16,7 +16,8 @@ ui_mode = ModeVariable("*** Apply Filtering to", "The mode to apply this filteri
 ui_device_name = StringVariable("Physical Device Label", "What to call this device in the log?", "Stick")
 ui_physical_guid = StringVariable("  -  Physical Device GUID", "Copy and paste from Tools > Device Information", "")
 ui_virtual_guid = StringVariable("  -  Virtual Device GUID", "Copy and paste from Tools > Device Information", "")
-ui_button_remapping = BoolVariable("Button Remapping Enabled?", "Actively remap button input? Required for filtering ghost inputs", True)
+ui_button_remapping = BoolVariable("Button Remapping Enabled?",
+                                   "Actively remap button input? Required for filtering ghost inputs", True)
 ui_button_filtering = BoolVariable("  -  Button Filtering Enabled?", "Actively filter ghost input?", True)
 ui_button_threshold = IntegerVariable("       -  Button Limit Threshold",
                                       "How many *buttons* pressed at once (within the Monitoring Timespan) constitute a Ghost Input (on a single device)? Default: 2",
@@ -24,11 +25,13 @@ ui_button_threshold = IntegerVariable("       -  Button Limit Threshold",
 ui_button_timespan = IntegerVariable("       -  Button Monitoring Timespan",
                                      "How many ticks (16.66ms) to wait after a button press before checking for ghost input? Default: 5",
                                      5, 1, 20)
-ui_axis_remapping = BoolVariable("Axis Remapping Enabled?", "Actively remap axes? Disable if remapping them through JG GUI", True)
+ui_axis_remapping = BoolVariable("Axis Remapping Enabled?",
+                                 "Actively remap axes? Disable if remapping them through JG GUI", True)
 ui_axis_curve = BoolVariable("  -  Smooth Response Curve?",
                              "Adds an S curve to the vjoy output, otherwise linear",
                              True)
-ui_hat_remapping = BoolVariable("Hat Remapping Enabled?", "Actively remap hats? Disable if remapping them through JG GUI", True)
+ui_hat_remapping = BoolVariable("Hat Remapping Enabled?",
+                                "Actively remap hats? Disable if remapping them through JG GUI", True)
 ui_logging_enabled = BoolVariable("Enable Logging?", "Output useful debug info to log", True)
 ui_logging_is_verbose = BoolVariable("  -  Verbose Logging",
                                      "Log every legitimate button press (instead of just Ghost Inputs)",
@@ -174,6 +177,7 @@ class FilteredDevice:
         self.button_timespan = [math.ceil(float(button_timespan) / 2) * self.tick_len,
                                 math.floor(float(button_timespan) / 2) * self.tick_len] if button_filtering else [0, 0]
         self.button_threshold = button_threshold
+        self.button_callbacks = defaultdict(list)
 
         self.axis_remapping = axis_remapping
         self.axis_curve = axis_curve
@@ -226,7 +230,8 @@ class FilteredDevice:
                     @self.decorator.axis(aid)
                     def callback(event, vjoy):
                         # Map the physical axis input to the virtual one
-                        vjoy[self.vjoy_id].axis(event.identifier).value = curve(event.value) if self.axis_curve else event.value
+                        vjoy[self.vjoy_id].axis(event.identifier).value = curve(
+                            event.value) if self.axis_curve else event.value
 
         # for each hat on the device
         if self.hat_remapping:
@@ -275,7 +280,7 @@ class FilteredDevice:
             still_pressed = joy[event.device_guid].button(event.identifier).is_pressed
 
             # update the virtual joystick (other functions could decorate this and execute here)
-            self.trigger_the_button(event, vjoy, joy, still_pressed)
+            self.trigger_the_button(event, vjoy, still_pressed)
 
             # log legitimate press
             if still_pressed:
@@ -287,15 +292,33 @@ class FilteredDevice:
             defer(self.button_timespan[1], self.end_button_monitoring)
 
     # update the virtual joystick
-    def trigger_the_button(self, event, vjoy, joy, new_value):
+    def trigger_the_button(self, event, vjoy, new_value):
         try:
             vjoy[self.vjoy_id].button(event.identifier).is_pressed = new_value
         except:
             debugger.log(
                 "Error trying to update vjoy[" + str(self.vjoy_id) + "].button(" + str(
                     event.identifier) + ") state  [Device \"" + self.name + "\" on Profile \"" + self.mode + "\"]")
+        # if this was a press
+        if event.is_pressed:
+            # execute any decorated callbacks from custom code (via @filtered_device.on_virtual_button(id) )
+            for key, funcs in self.button_callbacks.items():
+                # that match this button id
+                if key is event.identifier:
+                    # allowing for multiple callbacks per button
+                    for func in funcs:
+                        func()
+
+    # decorator for registering custom callbacks when a virtual button was successfully pressed
+    def on_virtual_button(self, btn):
+        def wrap(callback):
+            # add the decorated function into the callbacks for this button id
+            self.button_callbacks[btn].append(callback)
+        return wrap
+
 
 # helper functions
+
 def defer(time, func, args=[]):
     timer = threading.Timer(time, func, args)
     timer.start()
@@ -343,3 +366,6 @@ if physical_guid and virtual_guid:
         axis_curve,
         hat_remapping
     )
+
+else:
+    log("Couldn't initialize filtered_device")
