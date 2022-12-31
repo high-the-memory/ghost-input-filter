@@ -9,6 +9,7 @@ from gremlin.user_plugin import *
 # gremlin (developer) imports
 import gremlin.joystick_handling
 import gremlin.input_devices
+import gremlin.control_action
 from gremlin.spline import CubicSpline
 
 # Plugin UI Configuration
@@ -63,14 +64,66 @@ class Debugger:
             'total_blocked': 0,
             'total_allowed': 0,
             'by_button': defaultdict(int),
-            'by_simultaneity': defaultdict(int)
+            'by_simultaneity': defaultdict(int),
+            'by_combination': defaultdict(int)
         }
+        self.last_combination = set()
 
         # log a summary every time summary button is pressed (user configurable)
         @gremlin.input_devices.keyboard(self.summary_key, self.mode)
         def summary_callback(event):
             if event.is_pressed:
                 self.summarize()
+
+    def ready(self, device):
+
+        if not self.enabled:
+            return
+
+        # output general setup info
+        log("/////////////////////////////////////////////////////////////////////////////////////////////////////////////////")
+        log("Ghost Input Filtering", "on Profile [" + device.mode + "]")
+        log("  for Physical Device \"" + device.name + "\"", str(device.physical_guid))
+        log("  mapping to Virtual Device " + str(device.vjoy_id), str(device.virtual_guid))
+        if device.button_filtering:
+            log("   ... Button Filtering enabled")
+        if self.is_verbose:
+            log("   ... Verbose logging enabled")
+
+    def evaluate_ghost(self, device, button):
+
+        if not self.enabled:
+            return
+
+        # on press, increment the counters
+        self.counts['total_blocked'] += 1
+        self.counts['by_button'][button] += 1
+        self.counts['by_simultaneity'][len(device.concurrent_presses)] += 1.0 / len(device.concurrent_presses)
+        self.counts['by_combination'][str(sorted(device.concurrent_presses))] += 1.0 / len(device.concurrent_presses)
+
+        combination = device.concurrent_presses
+
+        # if this set is the same size or bigger, save it as latest
+        if len(combination) >= len(self.last_combination):
+            self.last_combination = set(combination)
+
+    def log_ghost(self, device):
+        # on release, log the highest ghosting event
+        if len(self.last_combination) > 0:
+            log("> GHOST INPUTS blocked! [" + device.mode + "] " + device.name + " pressed " + str(
+                len(self.last_combination)) + " buttons at once",
+                str(self.last_combination), 90)
+            self.last_combination = set()
+
+    def legitimate(self, device, event):
+
+        if not self.enabled:
+            return
+
+        # increment counters
+        self.counts['total_allowed'] += 1
+        if self.is_verbose:
+            log("USER pressed: " + device.name + " button " + str(event.identifier))
 
     def update(self):
         self.counts['total'] = self.counts['total_blocked'] + self.counts['total_allowed']
@@ -80,74 +133,50 @@ class Debugger:
         self.summary['per_minute'] = (self.counts['total_blocked'] / self.summary['elapsed_time']) * 60
         self.summary['per_hour'] = self.summary['per_minute'] * 60
 
-    def log(self, msg, **args):
+    def summarize(self):
+        if not self.enabled:
+            return
+
+        self.update()
+
+        global filtered_device
+
+        # output a summary
+        log("//////////////////////////////////////////////////////////////////")
+        log("   Summary for \"" + filtered_device.name + "\"", "on Profile [" + filtered_device.mode + "]")
+        log("   |      Total Inputs Allowed", str(self.counts['total_allowed']))
+        log("   |      Total Ghost Inputs Blocked", str(self.counts['total_blocked']))
+        log("   | ")
+        log("   |      Elapsed Time", str(self.summary['elapsed_time']) + " seconds" + "   (" + str(
+            round(self.summary['elapsed_time'] / 60, 1)) + " minutes)    (" + str(
+            round(self.summary['elapsed_time'] / 3600, 1)) + " hours)")
+        log("   |      Ghost Input %", str(round(self.summary['percentage'], 3)) + "%")
+        log("   |      Ghost Input rate", str(round(self.summary['per_minute'], 3)) + "/min   (" + str(
+            round(self.summary['per_hour'])) + "/hr)")
+        if self.counts['total_blocked'] > 0:
+            log("   | ")
+            log("   |      By Button")
+            # output how many times each button was ghosted, starting with the most common one
+            for btn, cnt in sorted(self.counts['by_button'].items(), key=lambda item: item[1], reverse=True):
+                log("   |            (Joy " + str(btn) + ")", str(cnt))
+            log("   |      By Simultaneity")
+            # output how many buttons were pressed at the same time, starting with the most common number
+            for simul, cnt in sorted(self.counts['by_simultaneity'].items(), key=lambda item: item[1],
+                                     reverse=True):
+                log("   |            (" + str(simul) + " at once)", str(int(cnt)))
+            log("   |      By Combination")
+            # output which combinations of buttons were pressed at the same time, starting with the most common group
+            for combo, cnt in sorted(self.counts['by_combination'].items(), key=lambda item: item[1],
+                                     reverse=True):
+                log("   |            " + str(combo), str(int(cnt)))
+
+    def log(self, msg):
 
         if not self.enabled:
             return
 
-        if msg is "ready":
-            # output general setup info
-            log("/////////////////////////////////////////////////////////////////////////////////////////////////////////////////")
-            log("Ghost Input Filtering", "on Profile [" + args['device'].mode + "]")
-            log("  for Physical Device \"" + args['device'].name + "\"", str(args['device'].physical_guid))
-            log("  mapping to Virtual Device " + str(args['device'].vjoy_id), str(args['device'].virtual_guid))
-            if args['device'].button_filtering:
-                log("   ... Button Filtering enabled")
-            if self.is_verbose:
-                log("   ... Verbose logging enabled")
-
-        elif msg is "ghost":
-            # increment counters
-            self.counts['total_blocked'] += 1
-            self.counts['by_button'][args['event'].identifier] += 1
-            self.counts['by_simultaneity'][args['device'].concurrent_presses] += 1
-            # log ghost input
-            log("> GHOST INPUT blocked! [" + args['device'].mode + "] " + args['device'].name + " button " + str(
-                args['event'].identifier) + " was pressed (" + str(
-                args['device'].concurrent_presses) + " buttons at once)")
-
-        elif msg is "legitimate":
-            # increment counters
-            self.counts['total_allowed'] += 1
-            if self.is_verbose:
-                log("USER pressed: " + args['device'].name + " button " + str(args['event'].identifier))
-
-        elif msg is "summary":
-            # output a summary
-            log("//////////////////////////////////////////////////////////////////")
-            log("   Summary for \"" + args['device'].name + "\"", "on Profile [" + args['device'].mode + "]")
-            log("   |      Total Inputs Allowed", str(self.counts['total_allowed']))
-            log("   |      Total Ghost Inputs Blocked", str(self.counts['total_blocked']))
-            log("   | ")
-            log("   |      Elapsed Time", str(self.summary['elapsed_time']) + " seconds" + "   (" + str(
-                round(self.summary['elapsed_time'] / 60, 1)) + " minutes)    (" + str(
-                round(self.summary['elapsed_time'] / 3600, 1)) + " hours)")
-            log("   |      Ghost Input %", str(round(self.summary['percentage'], 3)) + "%")
-            log("   |      Ghost Input rate", str(round(self.summary['per_minute'], 3)) + "/min   (" + str(
-                round(self.summary['per_hour'])) + "/hr)")
-            if self.counts['total_blocked'] > 0:
-                log("   | ")
-                log("   |      By Button")
-                # output how many times each button was ghosted, starting with the most common one
-                for btn, cnt in sorted(self.counts['by_button'].items(), key=lambda item: item[1], reverse=True):
-                    log("   |            (Joy " + str(btn) + ")", str(cnt))
-                log("   |      By Simultaneity")
-                # output how many buttons were pressed at the same time, starting with the most common number
-                for simul, cnt in sorted(self.counts['by_simultaneity'].items(), key=lambda item: item[1],
-                                         reverse=True):
-                    log("   |            (" + str(simul) + " at once)", str(cnt))
-            self.summary['recent'] = False
-
-        else:
-            # output the message
-            log(msg)
-
-    def summarize(self):
-        if not self.summary['recent'] and self.enabled:
-            global filtered_device
-            self.summary['recent'] = True
-            self.update()
-            self.log("summary", device=filtered_device)
+        # output the message
+        log(msg)
 
 
 # class for each physical joystick device, for filtering and mapping
@@ -177,14 +206,14 @@ class FilteredDevice:
         self.button_timespan = [math.ceil(float(button_timespan) / 2) * self.tick_len,
                                 math.floor(float(button_timespan) / 2) * self.tick_len] if button_filtering else [0, 0]
         self.button_threshold = button_threshold
-        self.button_callbacks = defaultdict(list)
+        self.button_callbacks = {'press': defaultdict(list), 'release': defaultdict(list)}
 
         self.axis_remapping = axis_remapping
         self.axis_curve = axis_curve
 
         self.hat_remapping = hat_remapping
 
-        self.concurrent_presses = 0
+        self.concurrent_presses = set()
 
         # create the decorator
         self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
@@ -194,19 +223,22 @@ class FilteredDevice:
             for btn in self.physical_device._buttons:
                 if btn:
                     # initialize value
-                    self.virtual_device.button(btn._index).is_pressed = self.physical_device.button(
-                        btn._index).is_pressed
+                    try:
+                        self.virtual_device.button(btn._index).is_pressed = self.physical_device.button(
+                            btn._index).is_pressed
+                    except:
+                        debugger.log("Error initializing button " + str(btn._index) + " value")
+                    else:
+                        # add a decorator function for when that button is pressed
+                        @self.decorator.button(btn._index)
+                        # pass that info to the function that will check other button presses
+                        def callback(event, vjoy, joy):
+                            # increment total buttons counter for this device (if this is a press)
+                            if event.is_pressed:
+                                self.start_button_monitoring(event.identifier)
 
-                    # add a decorator function for when that button is pressed
-                    @self.decorator.button(btn._index)
-                    # pass that info to the function that will check other button presses
-                    def callback(event, vjoy, joy):
-                        # increment total buttons counter for this device (if this is a press)
-                        if event.is_pressed:
-                            self.start_button_monitoring()
-
-                        # wait the first half of the delay timespan (set number of ticks), then check for ghost inputs
-                        defer(self.button_timespan[0], self.filter_the_button, [event, vjoy, joy])
+                            # wait the first half of the delay timespan (set number of ticks), then check for ghost inputs
+                            defer(self.button_timespan[0], self.filter_the_button, event, vjoy, joy)
 
         # for each axis on the device
         if self.axis_remapping:
@@ -223,110 +255,135 @@ class FilteredDevice:
                     ])
 
                     # initialize value
-                    value = self.physical_device.axis(aid).value
-                    self.virtual_device.axis(aid).value = curve(value) if self.axis_curve else value
-
-                    # add a decorator function for when that axis is moved
-                    @self.decorator.axis(aid)
-                    def callback(event, vjoy):
-                        # Map the physical axis input to the virtual one
-                        vjoy[self.vjoy_id].axis(event.identifier).value = curve(
-                            event.value) if self.axis_curve else event.value
+                    try:
+                        value = self.physical_device.axis(aid).value
+                        self.virtual_device.axis(aid).value = curve(value) if self.axis_curve else value
+                    except:
+                        debugger.log("Error initializing axis " + str(aid) + " value")
+                    else:
+                        # add a decorator function for when that axis is moved
+                        @self.decorator.axis(aid)
+                        def callback(event, vjoy):
+                            # Map the physical axis input to the virtual one
+                            vjoy[self.vjoy_id].axis(event.identifier).value = curve(
+                                event.value) if self.axis_curve else event.value
 
         # for each hat on the device
         if self.hat_remapping:
             for hat in self.physical_device._hats:
                 if hat:
                     # initialize value
-                    self.virtual_device.hat(hat._index).direction = self.physical_device.hat(hat._index).direction
-
-                    # add a decorator function for when that hat is used
-                    @self.decorator.hat(hat._index)
-                    def callback(event, vjoy):
-                        # Map the physical hat input to the virtual one
-                        # (perhaps later: Filtering algorithm? Right now, 1:1)
-                        vjoy[self.vjoy_id].hat(event.identifier).direction = event.value
+                    try:
+                        self.virtual_device.hat(hat._index).direction = self.physical_device.hat(hat._index).direction
+                    except:
+                        debugger.log("Error initializing hat " + str(hat._index) + " value")
+                    else:
+                        # add a decorator function for when that hat is used
+                        @self.decorator.hat(hat._index)
+                        def callback(event, vjoy):
+                            # Map the physical hat input to the virtual one
+                            # (perhaps later: Filtering algorithm? Right now, 1:1)
+                            vjoy[self.vjoy_id].hat(event.identifier).direction = event.value
 
         # Log that device is ready
-        debugger.log("ready", device=self)
+        debugger.ready(self)
 
     def get_count(self, input):
         joy_proxy = gremlin.input_devices.JoystickProxy()
         dev = joy_proxy[gremlin.profile.parse_guid(self.physical_guid)]
-        return len(dev._buttons) if input is "button" else len(dev._axis) if input is "axis" else len(
-            dev._hats) if input is "hat" else 0
+        return len(dev._buttons) if input == "button" else len(dev._axis) if input == "axis" else len(
+            dev._hats) if input == "hat" else 0
 
-    def start_button_monitoring(self):
-        self.concurrent_presses += 1
+    def start_button_monitoring(self, btn_id):
+        self.concurrent_presses.add(btn_id)
 
-    def end_button_monitoring(self):
-        self.concurrent_presses -= 1
+    def end_button_monitoring(self, btn_id):
+        global debugger
+        self.concurrent_presses.discard(btn_id)
+        if len(self.concurrent_presses) <= 0:
+            debugger.log_ghost(self)
 
     # checks total number of buttons pressed, every time a new button is pressed within the configured timespan
     # and maps the physical device to the virtual device if NOT a ghost input
     def filter_the_button(self, event, vjoy, joy):
 
-        # if <threshold> or more buttons (including this callback's triggered button) are pressed, this is likely a ghost input
-        is_ghost = self.concurrent_presses >= self.button_threshold
+        # get the current state (after this much delay)
+        still_pressed = joy[event.device_guid].button(event.identifier).is_pressed
+
+        # if we're filtering:
+        # if <threshold> or more buttons (including this callback's triggered button) are pressed,
+        # and this button is no longer still pressed, this is likely a ghost input
+        is_ghost = self.button_filtering and len(self.concurrent_presses) >= self.button_threshold and not still_pressed
 
         global debugger
 
-        # if this is a ghost input on key press (not release)
-        if event.is_pressed and is_ghost and self.button_filtering:
-            # log it
-            debugger.log("ghost", event=event, device=self)
-        else:
-            # otherwise, get the current state (after this much delay)
-            still_pressed = joy[event.device_guid].button(event.identifier).is_pressed
-
-            # update the virtual joystick (other functions could decorate this and execute here)
-            self.trigger_the_button(event, vjoy, still_pressed)
-
-            # log legitimate press
-            if still_pressed:
-                debugger.log("legitimate", event=event, device=self)
-
-        # after half the delay and evaluation, delay the next half, then decrement the pressed counter (if this was a press and not a release)
-        # enough time will have passed that this callback's button should no longer be used to determine a Ghost Input
+        # if this was initially a press
         if event.is_pressed:
-            defer(self.button_timespan[1], self.end_button_monitoring)
+            # if this is a ghost input, log it
+            if is_ghost:
+                debugger.evaluate_ghost(self, event.identifier)
+            else:
+                # otherwise, update the virtual joystick
+                self.trigger_the_button(event, vjoy, still_pressed)
+
+            # log a legitimate press and end monitoring
+            if not is_ghost and still_pressed:
+                debugger.legitimate(self, event)
+                self.end_button_monitoring(event.identifier)
+            else:
+                # otherwise, if it could still be part of a ghost press, wait the rest of the delay, then end
+                # enough time will have passed that this press should no longer be used to determine a Ghost Input
+                defer(self.button_timespan[1], self.end_button_monitoring, event.identifier)
+        else:
+            # always process every release
+            self.trigger_the_button(event, vjoy, still_pressed)
 
     # update the virtual joystick
     def trigger_the_button(self, event, vjoy, new_value):
-        try:
-            vjoy[self.vjoy_id].button(event.identifier).is_pressed = new_value
-        except:
-            debugger.log(
-                "Error trying to update vjoy[" + str(self.vjoy_id) + "].button(" + str(
-                    event.identifier) + ") state  [Device \"" + self.name + "\" on Profile \"" + self.mode + "\"]")
-        # if this was a press
-        if event.is_pressed:
-            # execute any decorated callbacks from custom code (via @filtered_device.on_virtual_button(id) )
-            for key, funcs in self.button_callbacks.items():
-                # that match this button id
-                if key is event.identifier:
-                    # allowing for multiple callbacks per button
-                    for func in funcs:
-                        func()
+        the_button = vjoy[self.vjoy_id].button(event.identifier)
+        the_button.is_pressed = new_value
+
+        # execute any decorated callbacks from custom code that match this key
+        # via @filtered_device.on_virtual_press(id)
+        if event.is_pressed and event.identifier in self.button_callbacks['press']:
+            # allowing for multiple callbacks per button
+            for callback in self.button_callbacks['press'][event.identifier]:
+                callback()
+        # via @filtered_device.on_virtual_release(id)
+        if not event.is_pressed and event.identifier in self.button_callbacks['release']:
+            # allowing for multiple callbacks per button
+            for callback in self.button_callbacks['release'][event.identifier]:
+                callback()
 
     # decorator for registering custom callbacks when a virtual button was successfully pressed
-    def on_virtual_button(self, btn):
-        def wrap(callback):
+    def on_virtual_press(self, btn):
+        def wrap(callback=None):
             # add the decorated function into the callbacks for this button id
-            self.button_callbacks[btn].append(callback)
+            if callback:
+                self.button_callbacks['press'][btn].append(callback)
+
+        return wrap
+
+    # decorator for registering custom callbacks when a virtual button was successfully released
+    def on_virtual_release(self, btn):
+        def wrap(callback=None):
+            # add the decorated function into the callbacks for this button id
+            if callback:
+                self.button_callbacks['release'][btn].append(callback)
+
         return wrap
 
 
 # helper functions
 
-def defer(time, func, args=[]):
-    timer = threading.Timer(time, func, args)
+def defer(time, func, *args, **kwargs):
+    timer = threading.Timer(time, func, args, kwargs)
     timer.start()
 
 
 # write to log (optionally as ~two columns)
-def log(str1, str2=""):
-    gremlin.util.log(((str1 + " ").ljust(50, ".") + " " + str2) if str2 else str1)
+def log(str1, str2="", width=50):
+    gremlin.util.log(((str1 + " ").ljust(width, ".") + " " + str2) if str2 else str1)
 
 
 # grab user configuration
@@ -371,3 +428,18 @@ if physical_guid and virtual_guid:
 
 else:
     log("Couldn't initialize filtered_device")
+
+# Custom Callbacks
+if filtered_device:
+    # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
+    pass
+
+    # Example:
+    # if name == "Stick":
+    #     @filtered_device.on_virtual_press(<button id>)
+    #     def custom_callback():
+    #         # do something here
+
+    #     @filtered_device.on_virtual_release(<button id>)
+    #     def custom_callback():
+    #         # do something here
