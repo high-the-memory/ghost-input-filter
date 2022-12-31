@@ -349,6 +349,8 @@ logging_enabled = bool(ui_logging_enabled.value)  # joystick gremlin has an issu
 logging_is_verbose = bool(ui_logging_is_verbose.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 logging_summary_key = ui_logging_summary_key.value
 
+filtered_device = None
+
 if physical_guid and virtual_guid:
     # Initialize debugging logging
     debugger = Debugger(mode, logging_enabled, logging_is_verbose, logging_summary_key)
