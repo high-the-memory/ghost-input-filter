@@ -220,15 +220,31 @@ class FilteredDevice:
 
         # for each button on the device
         if self.button_remapping:
-            for btn in self.physical_device._buttons:
-                if btn:
-                    # initialize value
-                    try:
-                        self.virtual_device.button(btn._index).is_pressed = self.physical_device.button(
-                            btn._index).is_pressed
-                    except:
-                        debugger.log("Error initializing button " + str(btn._index) + " value")
-                    else:
+            self.initialize_buttons(True)
+
+        # for each axis on the device
+        if self.axis_remapping:
+            self.initialize_axes(True)
+
+        # for each hat on the device
+        if self.hat_remapping:
+            self.initialize_hats(True)
+
+        # Log that device is ready
+        debugger.ready(self)
+
+    def initialize_buttons(self, first_time=False):
+        for btn in self.physical_device._buttons:
+            if btn:
+                # initialize value
+                try:
+                    self.virtual_device.button(btn._index).is_pressed = self.physical_device.button(
+                        btn._index).is_pressed
+                except:
+                    debugger.log("Error initializing button " + str(btn._index) + " value")
+                else:
+                    # if this is the first time, set up the decorators
+                    if first_time:
                         # add a decorator function for when that button is pressed
                         @self.decorator.button(btn._index)
                         # pass that info to the function that will check other button presses
@@ -240,27 +256,28 @@ class FilteredDevice:
                             # wait the first half of the delay timespan (set number of ticks), then check for ghost inputs
                             defer(self.button_timespan[0], self.filter_the_button, event, vjoy, joy)
 
-        # for each axis on the device
-        if self.axis_remapping:
-            # by default, axes don't seem to map 1:1, so make sure VJoy devices has all 8 axes(?)
-            for aid in self.physical_device._axis:
-                if aid:
-                    # set curve (perhaps later: customizable cubic spline? Filtering algorithm? Right now, 1:1 or S)
-                    curve = CubicSpline([
-                        (-1.0, -1.0),
-                        (-0.5, -0.25),
-                        (0.0, 0.0),
-                        (0.5, 0.25),
-                        (1.0, 1.0)
-                    ])
+    def initialize_axes(self, first_time=False):
+        # by default, axes don't seem to map 1:1, so make sure VJoy devices has all 8 axes(?)
+        for aid in self.physical_device._axis:
+            if aid:
+                # set curve (perhaps later: customizable cubic spline? Filtering algorithm? Right now, 1:1 or S)
+                curve = CubicSpline([
+                    (-1.0, -1.0),
+                    (-0.5, -0.25),
+                    (0.0, 0.0),
+                    (0.5, 0.25),
+                    (1.0, 1.0)
+                ])
 
-                    # initialize value
-                    try:
-                        value = self.physical_device.axis(aid).value
-                        self.virtual_device.axis(aid).value = curve(value) if self.axis_curve else value
-                    except:
-                        debugger.log("Error initializing axis " + str(aid) + " value")
-                    else:
+                # initialize value
+                try:
+                    value = self.physical_device.axis(aid).value
+                    self.virtual_device.axis(aid).value = curve(value) if self.axis_curve else value
+                except:
+                    debugger.log("Error initializing axis " + str(aid) + " value")
+                else:
+                    # if this is the first time, set up the decorators
+                    if first_time:
                         # add a decorator function for when that axis is moved
                         @self.decorator.axis(aid)
                         def callback(event, vjoy):
@@ -268,25 +285,23 @@ class FilteredDevice:
                             vjoy[self.vjoy_id].axis(event.identifier).value = curve(
                                 event.value) if self.axis_curve else event.value
 
-        # for each hat on the device
-        if self.hat_remapping:
-            for hat in self.physical_device._hats:
-                if hat:
-                    # initialize value
-                    try:
-                        self.virtual_device.hat(hat._index).direction = self.physical_device.hat(hat._index).direction
-                    except:
-                        debugger.log("Error initializing hat " + str(hat._index) + " value")
-                    else:
+    def initialize_hats(self, first_time=False):
+        for hat in self.physical_device._hats:
+            if hat:
+                # initialize value
+                try:
+                    self.virtual_device.hat(hat._index).direction = self.physical_device.hat(hat._index).direction
+                except:
+                    debugger.log("Error initializing hat " + str(hat._index) + " value")
+                else:
+                    # if this is the first time, set up the decorators
+                    if first_time:
                         # add a decorator function for when that hat is used
                         @self.decorator.hat(hat._index)
                         def callback(event, vjoy):
                             # Map the physical hat input to the virtual one
                             # (perhaps later: Filtering algorithm? Right now, 1:1)
                             vjoy[self.vjoy_id].hat(event.identifier).direction = event.value
-
-        # Log that device is ready
-        debugger.ready(self)
 
     def get_count(self, input):
         joy_proxy = gremlin.input_devices.JoystickProxy()
@@ -432,7 +447,6 @@ else:
 # Custom Callbacks
 if filtered_device:
     # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
-    pass
 
     # Example:
     # if name == "Stick":
@@ -443,3 +457,5 @@ if filtered_device:
     #     @filtered_device.on_virtual_release(<button id>)
     #     def custom_callback():
     #         # do something here
+
+    pass
