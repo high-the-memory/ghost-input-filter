@@ -75,14 +75,15 @@ class Debugger:
             if event.is_pressed:
                 self.summarize()
 
-    def ready(self, device):
+    def starting(self, device):
 
         if not self.enabled:
             return
 
         # output general setup info
-        log("Ready!")
+
         log("")
+        log("/////////////////////////////////////////////////////////////////////////////////////////////////////////////////")
         log("Ghost Input Filtering", "on Profile [" + device.mode + "]")
         log("  for Physical Device \"" + device.name + "\"", str(device.physical_guid))
         log("  mapping to Virtual Device " + str(device.vjoy_id), str(device.virtual_guid))
@@ -90,6 +91,10 @@ class Debugger:
             log("   ... Button Filtering enabled")
         if self.is_verbose:
             log("   ... Verbose logging enabled")
+
+    def ready(self, device):
+        log("")
+        log("   \"" + device.name + "\" Ready!")
 
     def evaluate_ghost(self, device, button):
 
@@ -220,12 +225,11 @@ class FilteredDevice:
         # create the decorator
         self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
 
-        log("")
-        log("/////////////////////////////////////////////////////////////////////////////////////////////////////////////////")
+        # Log device info
+        debugger.starting(self)
 
         self.initialize_inputs(True)
 
-        # Log that device is ready
         debugger.ready(self)
 
     def initialize_inputs(self, first_time=False):
@@ -242,7 +246,7 @@ class FilteredDevice:
             self.initialize_hats(first_time)
 
     def initialize_buttons(self, first_time=False):
-        debugger.log("Initializing buttons on " + self.name)
+        debugger.log("   ... Initializing buttons on " + self.name)
         for btn in self.physical_device._buttons:
             if btn:
                 # initialize value
@@ -266,7 +270,7 @@ class FilteredDevice:
                             defer(self.button_timespan[0], self.filter_the_button, event, vjoy, joy)
 
     def initialize_axes(self, first_time=False):
-        debugger.log("Initializing axes on " + self.name)
+        debugger.log("   ... Initializing axes on " + self.name)
         # by default, axes don't seem to map 1:1, so make sure VJoy devices has all 8 axes(?)
         for aid in self.physical_device._axis:
             if aid:
@@ -296,7 +300,7 @@ class FilteredDevice:
                                 event.value) if self.axis_curve else event.value
 
     def initialize_hats(self, first_time=False):
-        debugger.log("... Initializing hats on " + self.name)
+        debugger.log("   ... Initializing hats on " + self.name)
         for hat in self.physical_device._hats:
             if hat:
                 # initialize value
