@@ -12,42 +12,15 @@ import gremlin.input_devices
 import gremlin.control_action
 from gremlin.spline import CubicSpline
 
-# Plugin UI Configuration
-ui_mode = ModeVariable("*** Apply Filtering to", "The mode to apply this filtering to")
-ui_device_name = StringVariable("Physical Device Label", "What to call this device in the log?", "Stick")
-ui_physical_guid = StringVariable("  -  Physical Device GUID", "Copy and paste from Tools > Device Information", "")
-ui_virtual_guid = StringVariable("  -  Virtual Device GUID", "Copy and paste from Tools > Device Information", "")
-ui_button_remapping = BoolVariable("Button Remapping Enabled?",
-                                   "Actively remap button input? Required for filtering ghost inputs", True)
-ui_button_filtering = BoolVariable("  -  Button Filtering Enabled?", "Actively filter ghost input?", True)
-ui_button_threshold = IntegerVariable("       -  Button Limit Threshold",
-                                      "How many *buttons* pressed at once (within the Monitoring Timespan) constitute a Ghost Input (on a single device)? Default: 2",
-                                      2, 0, 100)
-ui_button_timespan = IntegerVariable("       -  Button Monitoring Timespan",
-                                     "How many ticks (16.66ms) to wait after a button press before checking for ghost input? Default: 5",
-                                     5, 1, 20)
-ui_axis_remapping = BoolVariable("Axis Remapping Enabled?",
-                                 "Actively remap axes? Disable if remapping them through JG GUI", True)
-ui_axis_curve = BoolVariable("  -  Smooth Response Curve?",
-                             "Adds an S curve to the vjoy output, otherwise linear",
-                             True)
-ui_hat_remapping = BoolVariable("Hat Remapping Enabled?",
-                                "Actively remap hats? Disable if remapping them through JG GUI", True)
-ui_logging_enabled = BoolVariable("Enable Logging?", "Output useful debug info to log", True)
-ui_logging_is_verbose = BoolVariable("  -  Verbose Logging",
-                                     "Log every legitimate button press (instead of just Ghost Inputs)",
-                                     False)
-ui_logging_summary_key = StringVariable("  -  Generate a Summary with Key",
-                                        "Which keyboard key to press to get a Ghost Input summary breakdown in the log?",
-                                        "f8")
+gremlin.util.log("got here!")
 
+
+# Classes
 
 class Debugger:
-    def __init__(self, mode, enabled, is_verbose, summary_key):
-        self.mode = mode
+    def __init__(self, enabled, is_verbose):
         self.enabled = enabled
         self.is_verbose = is_verbose
-        self.summary_key = summary_key
         self.summary = {
             'period': {
                 'ghost': 10,
@@ -69,12 +42,6 @@ class Debugger:
         }
         self.last_combination = set()
 
-        # log a summary every time summary button is pressed (user configurable)
-        @gremlin.input_devices.keyboard(self.summary_key, self.mode)
-        def summary_callback(event):
-            if event.is_pressed:
-                self.summarize()
-
     def starting(self, device):
 
         if not self.enabled:
@@ -83,18 +50,16 @@ class Debugger:
         # output general setup info
 
         log("")
-        log("/////////////////////////////////////////////////////////////////////////////////////////////////////////////////")
-        log("Ghost Input Filtering", "on Profile [" + device.mode + "]")
-        log("  for Physical Device \"" + device.name + "\"", str(device.physical_guid))
-        log("  mapping to Virtual Device " + str(device.vjoy_id), str(device.virtual_guid))
+        log("  Remapping \"" + device.name + "\"", str(device.physical_guid))
+        log("     to VJoy #" + str(device.vjoy_id), str(device.virtual_guid))
+        log("     on Profile", "[" + device.mode + "]")
         if device.button_filtering:
-            log("   ... Button Filtering enabled")
+            log("        ... Button Filtering enabled")
         if self.is_verbose:
-            log("   ... Verbose logging enabled")
+            log("        ... Verbose logging enabled")
 
     def ready(self, device):
-        log("")
-        log("   \"" + device.name + "\" Ready!")
+        log("          \"" + device.name + "\" to VJoy #" + str(device.vjoy_id) + " is Ready!")
 
     def evaluate_ghost(self, device, button):
 
@@ -139,13 +104,11 @@ class Debugger:
         self.summary['per_minute'] = (self.counts['total_blocked'] / self.summary['elapsed_time']) * 60
         self.summary['per_hour'] = self.summary['per_minute'] * 60
 
-    def summarize(self):
+    def summarize(self, filtered_device):
         if not self.enabled:
             return
 
         self.update()
-
-        global filtered_device
 
         # output a summary
         log("")
@@ -190,22 +153,27 @@ class Debugger:
 class FilteredDevice:
     def __init__(self,
                  # device
-                 physical_guid, virtual_guid, name, mode,
+                 physical_guid, vjoy_id, mode,
                  # buttons
                  button_remapping, button_filtering, button_timespan, button_threshold,
                  # axes
                  axis_remapping, axis_curve,
                  # hats
-                 hat_remapping
+                 hat_remapping,
+                 # logging
+                 summary_key
                  ):
 
-        self.name = name
+        # self.name = name
         self.mode = mode
         self.physical_guid = physical_guid
-        self.virtual_guid = virtual_guid
-        self.vjoy_id = gremlin.joystick_handling.vjoy_id_from_guid(gremlin.profile.parse_guid(str(virtual_guid)))
-        self.physical_device = (gremlin.input_devices.JoystickProxy())[gremlin.profile.parse_guid(self.physical_guid)]
+        self.physical_device = (gremlin.input_devices.JoystickProxy())[gremlin.profile.parse_guid(str(self.physical_guid))]
+        self.name = self.physical_device._info.name
+        self.vjoy_id = vjoy_id
+        self.virtual_guid = (gremlin.joystick_handling.vjoy_devices())[self.vjoy_id - 1].device_guid
         self.virtual_device = (gremlin.joystick_handling.VJoyProxy())[self.vjoy_id]
+
+        self.summary_key = summary_key
         self.tick_len = .01666
 
         self.button_remapping = button_remapping
@@ -222,11 +190,17 @@ class FilteredDevice:
 
         self.concurrent_presses = set()
 
+        # Log device info
+        debugger.starting(self)
+
         # create the decorator
         self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
 
-        # Log device info
-        debugger.starting(self)
+        # log a summary every time summary button is pressed (user configurable)
+        @gremlin.input_devices.keyboard(self.summary_key, self.mode)
+        def summary_callback(event):
+            if event.is_pressed:
+                debugger.summarize(self)
 
         self.initialize_inputs(True)
 
@@ -404,7 +378,7 @@ class FilteredDevice:
         return wrap
 
 
-# helper functions
+# Functions
 
 def defer(time, func, *args, **kwargs):
     timer = threading.Timer(time, func, args, kwargs)
@@ -413,15 +387,45 @@ def defer(time, func, *args, **kwargs):
 
 # write to log (optionally as ~two columns)
 def log(str1, str2="", width=50):
-    gremlin.util.log(((str1 + " ").ljust(width, ".") + " " + str2) if str2 else str1)
+    gremlin.util.log(((str(str1) + " ").ljust(width, ".") + " " + str(str2)) if str2 else str(str1))
 
 
-# grab user configuration
-name = ui_device_name.value
-mode = ui_mode.value
-physical_guid = ui_physical_guid.value
-virtual_guid = ui_virtual_guid.value
+# START SCRIPT
 
+log("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+log("Ghost Input Filter", "Script starting")
+
+# Output VJoy configuration to log, to show Windows (GUIDs) <-> Joystick Gremlin (Vjoy IDs) assignment
+log("The following VJoy devices were detected:")
+for vjoy in gremlin.joystick_handling.vjoy_devices():
+    log("   VJoy #" + str(vjoy.vjoy_id), vjoy.device_guid)
+
+# Plugin UI Configuration
+ui_button_remapping = BoolVariable("Enable Button Remapping?",
+                                   "Actively remap button input? Required for filtering ghost inputs", True)
+ui_button_filtering = BoolVariable("  -  Enable Button Filtering?", "Actively filter ghost input?", True)
+ui_button_threshold = IntegerVariable("          Button Filtering Sensitivity",
+                                      "How many *buttons* pressed at once (within a timespan) constitute a Ghost Input (on a single device)? Default: 2",
+                                      2, 0, 100)
+ui_button_timespan = IntegerVariable("          Button Filtering Strength",
+                                     "Determines the timespan after a button press before checking for ghost input? Default Strength: 6",
+                                     6, 1, 20)
+ui_axis_remapping = BoolVariable("Enable Axis Remapping?",
+                                 "Actively remap axes? Disable if remapping them through JG GUI", True)
+ui_axis_curve = BoolVariable("  -  Smooth Response Curve?",
+                             "Adds an S curve to the vjoy output, otherwise linear",
+                             True)
+ui_hat_remapping = BoolVariable("Enable Hat Remapping?",
+                                "Actively remap hats? Disable if remapping them through JG GUI", True)
+ui_logging_enabled = BoolVariable("Enable Logging?", "Output useful debug info to log", True)
+ui_logging_is_verbose = BoolVariable("  -  Verbose Logging",
+                                     "Log every legitimate button press (instead of just Ghost Inputs)",
+                                     False)
+ui_logging_summary_key = StringVariable("  -  Generate a Summary with Key",
+                                        "Which keyboard key to press to get a Ghost Input summary breakdown in the log?",
+                                        "f8")
+
+# Grab general user config
 button_remapping = bool(ui_button_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 button_filtering = bool(ui_button_filtering.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 button_timespan = ui_button_timespan.value
@@ -436,41 +440,70 @@ logging_enabled = bool(ui_logging_enabled.value)  # joystick gremlin has an issu
 logging_is_verbose = bool(ui_logging_is_verbose.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 logging_summary_key = ui_logging_summary_key.value
 
-filtered_device = None
+modes = set()
+devices_to_remap = {}
 
-if physical_guid and virtual_guid:
-    # Initialize debugging logging
-    debugger = Debugger(mode, logging_enabled, logging_is_verbose, logging_summary_key)
-    # Initialize filtered device (which creates decorators to listen for and filter input)
-    filtered_device = FilteredDevice(
-        physical_guid,
-        virtual_guid,
-        name,
-        mode,
-        button_remapping,
-        button_filtering,
-        button_timespan,
-        button_threshold,
-        axis_remapping,
-        axis_curve,
-        hat_remapping
-    )
+# Loop through vjoy devices
+for vjoy in gremlin.joystick_handling.vjoy_devices():
+    id = str(vjoy.vjoy_id)
 
-else:
-    log("Couldn't initialize filtered_device")
+    # create config for each one (because JG won't create the UI elements if simply stored in a list/dict)
+    vars()["ui_mode_" + id] = (ModeVariable("VJoy #" + id, "The mode to apply this filtering to"))
+    vars()["ui_physical_device_" + id] = PhysicalInputVariable("  -  Physical Device to map to VJoy #" + id,
+                                                               "Assign the physical device that should map to this device in the selected mode",
+                                                               is_optional=True)
 
-# Custom Callbacks
-if filtered_device:
-    # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
+    # grab config for each one
+    vars()["mode_" + id] = vars()["ui_mode_" + id].value
+    vars()["physical_device_" + id] = vars()["ui_physical_device_" + id].value
 
-    # Example:
-    # if name == "Stick":
-    #     @filtered_device.on_virtual_press(<button id>)
-    #     def custom_callback():
-    #         # do something here
+    # make a list of every unique mode involved
+    modes.add(vars()["mode_" + id])
 
-    #     @filtered_device.on_virtual_release(<button id>)
-    #     def custom_callback():
-    #         # do something here
+    # create a filtered device for each vjoy device that is getting remapped
+    if vars()["physical_device_" + id] is not None:
+        devices_to_remap[int(id)] = {
+            'device': vars()["physical_device_" + id],
+            'vjoy_id': int(id),
+            'mode': vars()["mode_" + id]
+        }
 
-    pass
+# Initialize debugging logging
+debugger = Debugger(logging_enabled, logging_is_verbose)
+
+log("Attempting to initialize " + str(len(devices_to_remap)) + " remappings")
+
+filtered_devices = {}
+
+for id, device_to_remap in devices_to_remap.items():
+
+    if device_to_remap['device'] is not None:
+        # Initialize filtered device (which creates decorators to listen for and filter input)
+        filtered_devices[id] = FilteredDevice(
+            device_to_remap['device']['device_id'],
+            device_to_remap['vjoy_id'],
+            device_to_remap['mode'],
+            button_remapping,
+            button_filtering,
+            button_timespan,
+            button_threshold,
+            axis_remapping,
+            axis_curve,
+            hat_remapping,
+            logging_summary_key
+        )
+
+        # Custom Callbacks
+        # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
+
+        # Example:
+        # if name == "Stick":
+        #     @filtered_device.on_virtual_press(<button id>)
+        #     def custom_callback():
+        #         # do something here
+
+        #     @filtered_device.on_virtual_release(<button id>)
+        #     def custom_callback():
+        #         # do something here
+
+        pass
