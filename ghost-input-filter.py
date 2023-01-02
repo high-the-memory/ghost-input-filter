@@ -10,6 +10,7 @@ from gremlin.user_plugin import *
 import gremlin.joystick_handling
 import gremlin.input_devices
 import gremlin.control_action
+import gremlin.event_handler
 from gremlin.spline import CubicSpline
 
 
@@ -200,32 +201,33 @@ class FilteredDevice:
         # create the decorator
         self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
 
-        self.initialize_inputs(True)
+        self.initialize_inputs(first_time=True)
 
         self.logger.ready()
 
     # set all the virtual inputs for this device to the current physical status
-    def initialize_inputs(self, first_time=False):
+    def initialize_inputs(self, start_at_zero=False, first_time=False):
         # for each button on the device
         if self.button_remapping:
-            self.initialize_buttons(first_time)
+            self.initialize_buttons(False if start_at_zero else None, first_time)
 
         # for each axis on the device
         if self.axis_remapping:
-            self.initialize_axes(first_time)
+            self.initialize_axes(0.0 if start_at_zero else None, first_time)
 
         # for each hat on the device
         if self.hat_remapping:
-            self.initialize_hats(first_time)
+            self.initialize_hats((0, 0) if start_at_zero else None, first_time)
 
-    def initialize_buttons(self, first_time=False):
-        self.logger.log("        ... Initializing buttons on " + self.name)
+    def initialize_buttons(self, value=None, first_time=False):
+        if first_time:
+            self.logger.log("        ... Initializing buttons on " + self.name)
         for btn in self.physical_device._buttons:
             if btn:
-                # initialize value
+                # initialize value (to off if explicitly set; otherwise, current value)
                 try:
-                    self.virtual_device.button(btn._index).is_pressed = self.physical_device.button(
-                        btn._index).is_pressed
+                    self.virtual_device.button(
+                        btn._index).is_pressed = value if value is not None else self.get_button(btn._index)
                 except:
                     self.logger.log("> Error initializing button " + str(btn._index) + " value")
                 else:
@@ -242,8 +244,9 @@ class FilteredDevice:
                             # wait the first half of the delay timespan (set number of ticks), then check for ghost inputs
                             defer(self.button_timespan[0], self.filter_the_button, event, vjoy, joy)
 
-    def initialize_axes(self, first_time=False):
-        self.logger.log("        ... Initializing axes on " + self.name)
+    def initialize_axes(self, value=None, first_time=False):
+        if first_time:
+            self.logger.log("        ... Initializing axes on " + self.name)
         # by default, axes don't seem to map 1:1, so make sure VJoy devices has all 8 axes(?)
         for aid in self.physical_device._axis:
             if aid:
@@ -258,8 +261,8 @@ class FilteredDevice:
 
                 # initialize value
                 try:
-                    value = self.physical_device.axis(aid).value
-                    self.virtual_device.axis(aid).value = curve(value) if self.axis_curve else value
+                    axis_value = value if value is not None else self.get_axis(aid)
+                    self.virtual_device.axis(aid).value = curve(axis_value) if self.axis_curve else axis_value
                 except:
                     self.logger.log("> Error initializing axis " + str(aid) + " value")
                 else:
@@ -272,13 +275,15 @@ class FilteredDevice:
                             vjoy[self.vjoy_id].axis(event.identifier).value = curve(
                                 event.value) if self.axis_curve else event.value
 
-    def initialize_hats(self, first_time=False):
-        self.logger.log("        ... Initializing hats on " + self.name)
+    def initialize_hats(self, value=None, first_time=False):
+        if first_time:
+            self.logger.log("        ... Initializing hats on " + self.name)
         for hat in self.physical_device._hats:
             if hat:
                 # initialize value
                 try:
-                    self.virtual_device.hat(hat._index).direction = self.physical_device.hat(hat._index).direction
+                    self.virtual_device.hat(
+                        hat._index).direction = value if value is not None else self.get_hat(hat._index)
                 except:
                     self.logger.log("> Error initializing hat " + str(hat._index) + " value")
                 else:
@@ -290,6 +295,15 @@ class FilteredDevice:
                             # Map the physical hat input to the virtual one
                             # (perhaps later: Filtering algorithm? Right now, 1:1)
                             vjoy[self.vjoy_id].hat(event.identifier).direction = event.value
+
+    def get_button(self, id):
+        return self.physical_device.button(id).is_pressed
+
+    def get_axis(self, id):
+        return self.physical_device.axis(id).value
+
+    def get_hat(self, id):
+        return self.physical_device.hat(id).direction
 
     def start_button_monitoring(self, btn_id):
         self.concurrent_presses.add(btn_id)
@@ -350,20 +364,22 @@ class FilteredDevice:
                 callback()
 
     # decorator for registering custom callbacks when a virtual button was successfully pressed
-    def on_virtual_press(self, btn):
+    def on_virtual_press(self, btns):
         def wrap(callback=None):
-            # add the decorated function into the callbacks for this button id
+            # add the decorated function into the callbacks for this/these button id(s)
             if callback:
-                self.button_callbacks['press'][btn].append(callback)
+                for btn in btns if type(btns) is list else [btns]:
+                    self.button_callbacks['press'][btn].append(callback)
 
         return wrap
 
     # decorator for registering custom callbacks when a virtual button was successfully released
-    def on_virtual_release(self, btn):
+    def on_virtual_release(self, btns):
         def wrap(callback=None):
-            # add the decorated function into the callbacks for this button id
+            # add the decorated function into the callbacks for this/these button id(s)
             if callback:
-                self.button_callbacks['release'][btn].append(callback)
+                for btn in btns if type(btns) is list else [btns]:
+                    self.button_callbacks['release'][btn].append(callback)
 
         return wrap
 
@@ -382,19 +398,22 @@ def log(str1, str2="", width=80):
 
 
 # update all virtual devices with the current status from the physical devices
-def initialize_inputs():
+def initialize_all_inputs():
     global filtered_devices
+    active_mode = gremlin.event_handler.EventHandler().active_mode
     for id, filtered_device in filtered_devices.items():
-        filtered_device.initialize_inputs()
+        # if the new mode matches this device's mode, use the physical device input status
+        # otherwise; initialize inputs to 0
+        filtered_device.initialize_inputs(start_at_zero=active_mode != filtered_device.mode)
 
 
-# switch modes and update all input states (prevents latched buttons during a mode switch)
+# switch modes and update all input states (synchronizes button states after a mode switch to prevent latching)
 def switch_mode(mode=None):
     if mode is None:
         gremlin.control_action.switch_to_previous_mode()
     else:
         gremlin.control_action.switch_mode(mode)
-    initialize_inputs()
+    initialize_all_inputs()
 
 
 # Plugin UI Configuration
