@@ -12,21 +12,18 @@ import gremlin.input_devices
 import gremlin.control_action
 from gremlin.spline import CubicSpline
 
-gremlin.util.log("got here!")
-
 
 # Classes
 
-class Debugger:
-    def __init__(self, enabled, is_verbose):
+class Logger:
+    def __init__(self, device, enabled, is_verbose, summary_key):
+
+        self.device = device
+
         self.enabled = enabled
         self.is_verbose = is_verbose
+        self.summary_key = summary_key
         self.summary = {
-            'period': {
-                'ghost': 10,
-                'legitimate': 100
-            },
-            'recent': False,
             'percentage': 0.0,
             'start_time': time.localtime(),
             'elapsed_time': 0.0,
@@ -42,7 +39,15 @@ class Debugger:
         }
         self.last_combination = set()
 
-    def starting(self, device):
+        # log a summary every time summary button is pressed (user configurable)
+        @gremlin.input_devices.keyboard(self.summary_key, self.device.mode)
+        def summary_callback(event):
+            if event.is_pressed:
+                self.summarize()
+
+        self.starting()
+
+    def starting(self):
 
         if not self.enabled:
             return
@@ -50,18 +55,18 @@ class Debugger:
         # output general setup info
 
         log("")
-        log("  Remapping \"" + device.name + "\"", str(device.physical_guid))
-        log("     to VJoy #" + str(device.vjoy_id), str(device.virtual_guid))
-        log("     on Profile", "[" + device.mode + "]")
-        if device.button_filtering:
+        log("  Remapping \"" + self.device.name + "\"", str(self.device.physical_guid))
+        log("     to VJoy #" + str(self.device.vjoy_id), str(self.device.virtual_guid))
+        log("     on Profile", "[" + self.device.mode + "]")
+        if self.device.button_filtering:
             log("        ... Button Filtering enabled")
         if self.is_verbose:
             log("        ... Verbose logging enabled")
 
-    def ready(self, device):
-        log("          \"" + device.name + "\" to VJoy #" + str(device.vjoy_id) + " is Ready!")
+    def ready(self):
+        log("          \"" + self.device.name + "\" to VJoy #" + str(self.device.vjoy_id) + " is Ready!")
 
-    def evaluate_ghost(self, device, button):
+    def evaluate_ghost(self, button):
 
         if not self.enabled:
             return
@@ -69,24 +74,25 @@ class Debugger:
         # on press, increment the counters
         self.counts['total_blocked'] += 1
         self.counts['by_button'][button] += 1
-        self.counts['by_simultaneity'][len(device.concurrent_presses)] += 1.0 / len(device.concurrent_presses)
-        self.counts['by_combination'][str(sorted(device.concurrent_presses))] += 1.0 / len(device.concurrent_presses)
+        self.counts['by_simultaneity'][len(self.device.concurrent_presses)] += 1.0 / len(self.device.concurrent_presses)
+        self.counts['by_combination'][str(sorted(self.device.concurrent_presses))] += 1.0 / len(
+            self.device.concurrent_presses)
 
-        combination = device.concurrent_presses
+        combination = self.device.concurrent_presses
 
         # if this set is the same size or bigger, save it as latest
         if len(combination) >= len(self.last_combination):
             self.last_combination = set(combination)
 
-    def log_ghost(self, device):
+    def log_ghost(self):
         # on release, log the highest ghosting event
         if len(self.last_combination) > 0:
-            log("> GHOST INPUTS blocked! [" + device.mode + "] " + device.name + " pressed " + str(
+            log("> GHOST INPUTS blocked! [" + self.device.mode + "] " + self.device.name + " pressed " + str(
                 len(self.last_combination)) + " buttons at once",
                 str(self.last_combination), 90)
             self.last_combination = set()
 
-    def legitimate(self, device, event):
+    def log_legitimate(self, event):
 
         if not self.enabled:
             return
@@ -94,7 +100,7 @@ class Debugger:
         # increment counters
         self.counts['total_allowed'] += 1
         if self.is_verbose:
-            log("USER pressed: " + device.name + " button " + str(event.identifier))
+            log("USER pressed: " + self.device.name + " button " + str(event.identifier))
 
     def update(self):
         self.counts['total'] = self.counts['total_blocked'] + self.counts['total_allowed']
@@ -104,7 +110,7 @@ class Debugger:
         self.summary['per_minute'] = (self.counts['total_blocked'] / self.summary['elapsed_time']) * 60
         self.summary['per_hour'] = self.summary['per_minute'] * 60
 
-    def summarize(self, filtered_device):
+    def summarize(self):
         if not self.enabled:
             return
 
@@ -113,7 +119,7 @@ class Debugger:
         # output a summary
         log("")
         log("//////////////////////////////////////////////////////////////////")
-        log("   Summary for \"" + filtered_device.name + "\"", "on Profile [" + filtered_device.mode + "]")
+        log("   Summary for \"" + self.device.name + "\"", "on Profile [" + self.device.mode + "]")
         log("   |      Total Inputs Allowed", str(self.counts['total_allowed']))
         log("   |      Total Ghost Inputs Blocked", str(self.counts['total_blocked']))
         log("   | ")
@@ -153,59 +159,52 @@ class Debugger:
 class FilteredDevice:
     def __init__(self,
                  # device
-                 physical_guid, vjoy_id, mode,
+                 physical_device, name, vjoy_id, mode,
                  # buttons
-                 button_remapping, button_filtering, button_timespan, button_threshold,
+                 button_remapping_enabled, button_filtering, button_timespan, button_threshold,
                  # axes
-                 axis_remapping, axis_curve,
+                 axis_remapping_enabled, axis_curve,
                  # hats
-                 hat_remapping,
-                 # logging
-                 summary_key
+                 hat_remapping_enabled,
+                 # debugging
+                 logging_enabled, logging_is_verbose, logging_summary_key
                  ):
 
-        # self.name = name
         self.mode = mode
-        self.physical_guid = physical_guid
-        self.physical_device = (gremlin.input_devices.JoystickProxy())[gremlin.profile.parse_guid(str(self.physical_guid))]
-        self.name = self.physical_device._info.name
+        self.physical_device = physical_device
+        self.physical_guid = self.physical_device._info.device_guid
+        self.name = name
         self.vjoy_id = vjoy_id
         self.virtual_guid = (gremlin.joystick_handling.vjoy_devices())[self.vjoy_id - 1].device_guid
         self.virtual_device = (gremlin.joystick_handling.VJoyProxy())[self.vjoy_id]
 
-        self.summary_key = summary_key
         self.tick_len = .01666
 
-        self.button_remapping = button_remapping
+        self.button_remapping = button_remapping_enabled
         self.button_filtering = button_filtering
         self.button_timespan = [math.ceil(float(button_timespan) / 2) * self.tick_len,
                                 math.floor(float(button_timespan) / 2) * self.tick_len] if button_filtering else [0, 0]
         self.button_threshold = button_threshold
         self.button_callbacks = {'press': defaultdict(list), 'release': defaultdict(list)}
 
-        self.axis_remapping = axis_remapping
+        self.axis_remapping = axis_remapping_enabled
         self.axis_curve = axis_curve
 
-        self.hat_remapping = hat_remapping
+        self.hat_remapping = hat_remapping_enabled
 
         self.concurrent_presses = set()
 
-        # Log device info
-        debugger.starting(self)
+        # Initialize debugging logging
+        self.logger = Logger(self, logging_enabled, logging_is_verbose, logging_summary_key)
 
         # create the decorator
         self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
 
-        # log a summary every time summary button is pressed (user configurable)
-        @gremlin.input_devices.keyboard(self.summary_key, self.mode)
-        def summary_callback(event):
-            if event.is_pressed:
-                debugger.summarize(self)
-
         self.initialize_inputs(True)
 
-        debugger.ready(self)
+        self.logger.ready()
 
+    # set all the virtual inputs for this device to the current physical status
     def initialize_inputs(self, first_time=False):
         # for each button on the device
         if self.button_remapping:
@@ -220,7 +219,7 @@ class FilteredDevice:
             self.initialize_hats(first_time)
 
     def initialize_buttons(self, first_time=False):
-        debugger.log("   ... Initializing buttons on " + self.name)
+        self.logger.log("        ... Initializing buttons on " + self.name)
         for btn in self.physical_device._buttons:
             if btn:
                 # initialize value
@@ -228,7 +227,7 @@ class FilteredDevice:
                     self.virtual_device.button(btn._index).is_pressed = self.physical_device.button(
                         btn._index).is_pressed
                 except:
-                    debugger.log("Error initializing button " + str(btn._index) + " value")
+                    self.logger.log("> Error initializing button " + str(btn._index) + " value")
                 else:
                     # if this is the first time, set up the decorators
                     if first_time:
@@ -244,7 +243,7 @@ class FilteredDevice:
                             defer(self.button_timespan[0], self.filter_the_button, event, vjoy, joy)
 
     def initialize_axes(self, first_time=False):
-        debugger.log("   ... Initializing axes on " + self.name)
+        self.logger.log("        ... Initializing axes on " + self.name)
         # by default, axes don't seem to map 1:1, so make sure VJoy devices has all 8 axes(?)
         for aid in self.physical_device._axis:
             if aid:
@@ -262,7 +261,7 @@ class FilteredDevice:
                     value = self.physical_device.axis(aid).value
                     self.virtual_device.axis(aid).value = curve(value) if self.axis_curve else value
                 except:
-                    debugger.log("Error initializing axis " + str(aid) + " value")
+                    self.logger.log("> Error initializing axis " + str(aid) + " value")
                 else:
                     # if this is the first time, set up the decorators
                     if first_time:
@@ -274,14 +273,14 @@ class FilteredDevice:
                                 event.value) if self.axis_curve else event.value
 
     def initialize_hats(self, first_time=False):
-        debugger.log("   ... Initializing hats on " + self.name)
+        self.logger.log("        ... Initializing hats on " + self.name)
         for hat in self.physical_device._hats:
             if hat:
                 # initialize value
                 try:
                     self.virtual_device.hat(hat._index).direction = self.physical_device.hat(hat._index).direction
                 except:
-                    debugger.log("Error initializing hat " + str(hat._index) + " value")
+                    self.logger.log("> Error initializing hat " + str(hat._index) + " value")
                 else:
                     # if this is the first time, set up the decorators
                     if first_time:
@@ -292,20 +291,13 @@ class FilteredDevice:
                             # (perhaps later: Filtering algorithm? Right now, 1:1)
                             vjoy[self.vjoy_id].hat(event.identifier).direction = event.value
 
-    def get_count(self, input):
-        joy_proxy = gremlin.input_devices.JoystickProxy()
-        dev = joy_proxy[gremlin.profile.parse_guid(self.physical_guid)]
-        return len(dev._buttons) if input == "button" else len(dev._axis) if input == "axis" else len(
-            dev._hats) if input == "hat" else 0
-
     def start_button_monitoring(self, btn_id):
         self.concurrent_presses.add(btn_id)
 
     def end_button_monitoring(self, btn_id):
-        global debugger
         self.concurrent_presses.discard(btn_id)
         if len(self.concurrent_presses) <= 0:
-            debugger.log_ghost(self)
+            self.logger.log_ghost()
 
     # checks total number of buttons pressed, every time a new button is pressed within the configured timespan
     # and maps the physical device to the virtual device if NOT a ghost input
@@ -319,20 +311,18 @@ class FilteredDevice:
         # and this button is no longer still pressed, this is likely a ghost input
         is_ghost = self.button_filtering and len(self.concurrent_presses) >= self.button_threshold and not still_pressed
 
-        global debugger
-
         # if this was initially a press
         if event.is_pressed:
             # if this is a ghost input, log it
             if is_ghost:
-                debugger.evaluate_ghost(self, event.identifier)
+                self.logger.evaluate_ghost(event.identifier)
             else:
                 # otherwise, update the virtual joystick
                 self.trigger_the_button(event, vjoy, still_pressed)
 
             # log a legitimate press and end monitoring
             if not is_ghost and still_pressed:
-                debugger.legitimate(self, event)
+                self.logger.log_legitimate(event)
                 self.end_button_monitoring(event.identifier)
             else:
                 # otherwise, if it could still be part of a ghost press, wait the rest of the delay, then end
@@ -380,25 +370,32 @@ class FilteredDevice:
 
 # Functions
 
+# execute function after delay (via threading)
 def defer(time, func, *args, **kwargs):
     timer = threading.Timer(time, func, args, kwargs)
     timer.start()
 
 
 # write to log (optionally as ~two columns)
-def log(str1, str2="", width=50):
+def log(str1, str2="", width=80):
     gremlin.util.log(((str(str1) + " ").ljust(width, ".") + " " + str(str2)) if str2 else str(str1))
 
 
-# START SCRIPT
+# update all virtual devices with the current status from the physical devices
+def initialize_inputs():
+    global filtered_devices
+    for id, filtered_device in filtered_devices.items():
+        filtered_device.initialize_inputs()
 
-log("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-log("Ghost Input Filter", "Script starting")
 
-# Output VJoy configuration to log, to show Windows (GUIDs) <-> Joystick Gremlin (Vjoy IDs) assignment
-log("The following VJoy devices were detected:")
-for vjoy in gremlin.joystick_handling.vjoy_devices():
-    log("   VJoy #" + str(vjoy.vjoy_id), vjoy.device_guid)
+# switch modes and update all input states (prevents latched buttons during a mode switch)
+def switch_mode(mode=None):
+    if mode is None:
+        gremlin.control_action.switch_to_previous_mode()
+    else:
+        gremlin.control_action.switch_mode(mode)
+    initialize_inputs()
+
 
 # Plugin UI Configuration
 ui_button_remapping = BoolVariable("Enable Button Remapping?",
@@ -426,72 +423,77 @@ ui_logging_summary_key = StringVariable("  -  Generate a Summary with Key",
                                         "f8")
 
 # Grab general user config
-button_remapping = bool(ui_button_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
+button_remapping_enabled = bool(
+    ui_button_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 button_filtering = bool(ui_button_filtering.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 button_timespan = ui_button_timespan.value
 button_threshold = ui_button_threshold.value
 
-axis_remapping = bool(ui_axis_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
+axis_remapping_enabled = bool(ui_axis_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 axis_curve = bool(ui_axis_curve.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 
-hat_remapping = bool(ui_hat_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
+hat_remapping_enabled = bool(ui_hat_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 
 logging_enabled = bool(ui_logging_enabled.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 logging_is_verbose = bool(ui_logging_is_verbose.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 logging_summary_key = ui_logging_summary_key.value
 
-modes = set()
-devices_to_remap = {}
+vjoy_devices = sorted(gremlin.joystick_handling.vjoy_devices(), key=lambda x: x.vjoy_id)
+filtered_devices = {}
+nicknames = defaultdict(list)
+
+log("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+log("Ghost Input Filter", "Script starting")
+
+# Output VJoy configuration to log, to show Windows (GUIDs) <-> Joystick Gremlin (Vjoy IDs) assignment
+log("The following VJoy devices were detected:")
+for vjoy in vjoy_devices:
+    log("   VJoy #" + str(vjoy.vjoy_id), vjoy.device_guid)
 
 # Loop through vjoy devices
-for vjoy in gremlin.joystick_handling.vjoy_devices():
-    id = str(vjoy.vjoy_id)
+for vjoy in vjoy_devices:
+    vjoy_id = str(vjoy.vjoy_id)
 
-    # create config for each one (because JG won't create the UI elements if simply stored in a list/dict)
-    vars()["ui_mode_" + id] = (ModeVariable("VJoy #" + id, "The mode to apply this filtering to"))
-    vars()["ui_physical_device_" + id] = PhysicalInputVariable("  -  Physical Device to map to VJoy #" + id,
-                                                               "Assign the physical device that should map to this device in the selected mode",
-                                                               is_optional=True)
+    # create config for each one (because JG won't create the UI elements if simply stored in a list/dict.. must be top-level variables?)
+    vars()["ui_mode_" + vjoy_id] = (ModeVariable("VJoy #" + vjoy_id, "The mode to apply this filtering to"))
+    vars()["ui_physical_device_" + vjoy_id] = PhysicalInputVariable("  -  Physical Device to map to VJoy #" + vjoy_id,
+                                                                    "Assign the physical device that should map to this device in the selected mode",
+                                                                    is_optional=True)
+    # if we have a physical device set for this remapping
+    if vars()["ui_physical_device_" + vjoy_id].value is not None:
+        # grab config for each one
+        mode = vars()["ui_mode_" + vjoy_id].value
+        device_guid = str(vars()["ui_physical_device_" + vjoy_id].value['device_id'])
 
-    # grab config for each one
-    vars()["mode_" + id] = vars()["ui_mode_" + id].value
-    vars()["physical_device_" + id] = vars()["ui_physical_device_" + id].value
+        # create physical device proxy
+        device = (gremlin.input_devices.JoystickProxy())[gremlin.profile.parse_guid(device_guid)]
 
-    # make a list of every unique mode involved
-    modes.add(vars()["mode_" + id])
+        # generate a unique but shorter name for this device
+        name = device._info.name
+        nickname = "Stick" if "stick" in name.lower() else "Throttle" if "throttle" in name.lower() else name
+        nickname = nickname if nickname not in nicknames or device_guid in nicknames[
+            nickname] else nickname + " " + str(len(nicknames[nickname]) + 1)
+        nicknames[nickname].append(device_guid)
 
-    # create a filtered device for each vjoy device that is getting remapped
-    if vars()["physical_device_" + id] is not None:
-        devices_to_remap[int(id)] = {
-            'device': vars()["physical_device_" + id],
-            'vjoy_id': int(id),
-            'mode': vars()["mode_" + id]
-        }
-
-# Initialize debugging logging
-debugger = Debugger(logging_enabled, logging_is_verbose)
-
-log("Attempting to initialize " + str(len(devices_to_remap)) + " remappings")
-
-filtered_devices = {}
-
-for id, device_to_remap in devices_to_remap.items():
-
-    if device_to_remap['device'] is not None:
+        # create a filtered device for each vjoy device that is getting remapped
         # Initialize filtered device (which creates decorators to listen for and filter input)
-        filtered_devices[id] = FilteredDevice(
-            device_to_remap['device']['device_id'],
-            device_to_remap['vjoy_id'],
-            device_to_remap['mode'],
-            button_remapping,
+        filtered_device = FilteredDevice(
+            device,
+            nickname,
+            int(vjoy_id),
+            mode,
+            button_remapping_enabled,
             button_filtering,
             button_timespan,
             button_threshold,
-            axis_remapping,
+            axis_remapping_enabled,
             axis_curve,
-            hat_remapping,
+            hat_remapping_enabled,
+            logging_enabled,
+            logging_is_verbose,
             logging_summary_key
         )
+        filtered_devices[int(vjoy_id)] = filtered_device
 
         # Custom Callbacks
         # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
