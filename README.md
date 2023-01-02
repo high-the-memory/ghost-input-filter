@@ -8,7 +8,14 @@ Written for the Logitech X56 Hotas (but should work for any Hotas), wherein I wa
 
 This python plugin for Joystick Gremlin will map all physical buttons on a given device to the same buttons on a vJoy device, EXCEPT where multiple buttons are detected at the same time within a configurable timespan (~50ms by default).
 
-<!-- GETTING STARTED -->
+## How It Works
+
+By default, this plugin will map every internal button (1-17 on an X56 Stick and 1-36 on an X56 throttle) to the corresponding button on a vJoy device.
+
+When you press a button on the _physical_ device, the **plugin** determines if this is likely a ghost input. If it is, it is blocked. Otherwise, **Joystick Gremlin** remaps the input to a virtual **vJoy** device. This is the input that is seen by the game. **HidHide** ensures that the game only sees the _virtual_ input, and not the _physical_ device. Thus, all ghosting is ignored. 
+
+You can also add other mappings or JG configurations in the normal gui, and they should work on top of this plugin mapping.
+
 ## Getting Started
 
 You'll need a few programs installed and configured.
@@ -29,28 +36,3 @@ You'll need a few programs installed and configured.
 4. Don't forget to **File > Save Profile**
 
 (For an in-depth rundown of the steps for these different programs, check out the [Installation Guide](https://github.com/high-the-memory/ghost-input-filter/wiki/Installation-Guide) wiki)
-
-
-<!-- USAGE EXAMPLES -->
-## Usage
-
-### In Joystick Gremlin:
-- Click the Configuration button on the plugin
-- Open Tools > Device Information
-- Copy the GUID for the physical device, and paste it in the Physical Device GUID section
-- Copy the GUID for the virtual device to map to, and paste it in the Virtual Device GUID section
-- Configure the number of simultaneous button presses that should be considered a Ghost Input
-- Configure the amount of ticks during which a button press should be evaluated
-
-#### Multiple Instances
-You can create multiple instances of the plugin for each physical device and/or each JG Mode you need to filter
-- Click the plus (+) button on the plugin
-- Change the GUIDs of the physical and virtual devices, and the Mode that should be used
-
-### vJoy
-By default, this plugin will map every internal button (1-17 on my X56 Stick and 1-36 on my X56 throttle) to the corresponding button on a vJoy device. It is very similar to JG's "1-to-1 Mapping" preset. It will also map all axes and hats by default. Make sure vJoy is configured with enough buttons and hats for your device(s) (and ideally keep all axes on, since JG doesn't always map axes 1:1).
-
-You can also add other mappings or JG configurations in the normal gui, and they should work on top of this plugin mapping.
-
-### HidHide
-HidHide allows you to hide your <i>physical</i> joystick from certain programs (such as your game). Configuring that will allow you to only pass vJoy inputs to your game, and thus filter out ghost inputs.
