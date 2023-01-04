@@ -2,6 +2,7 @@
 import threading
 import math
 import time
+from datetime import datetime
 from collections import defaultdict
 # gremlin (user plugin) imports
 import gremlin
@@ -107,10 +108,10 @@ class Logger:
             return
 
         # build the event
-        current_time = time.time()
+        current_time = datetime.now()
         the_event = {
             button: [
-                round(current_time, 3), "ghost" if is_ghost else "long" if still_pressed else "short"
+                current_time, "ghost" if is_ghost else "long" if still_pressed else "short"
             ]
         }
         the_key = current_time
@@ -160,8 +161,7 @@ class Logger:
                         msg = "> GHOST INPUTS blocked!"
                     elif event_type_to_flush is "allowed" and self.is_debug:
                         if state is "archive":
-                            msg = "   |            At " + str(
-                                time.strftime('%H:%M:%S', time.localtime(key))) + " ..... "
+                            msg = "   |            At " + str(key.strftime('%H:%M:%S.%f')[:-3]) + " ..... "
                         else:
                             msg = "> USER PRESS allowed:"
                     else:
@@ -170,11 +170,13 @@ class Logger:
                         # build human-readable button breakdown string
                         buttons = []
                         for button, info in event.items():
-                            buttons.append(
-                                "Joy " + str(button) + ": " + str(info[1]) + " press " + (
-                                    "blocked" if info[1] == "ghost" else "allowed") + (
-                                    " @ " + str(info[0]) if self.is_debug else ""))
-                        breakdown = "(" + (", ".join(buttons)) + ")"
+                            btn_str = str(info[1]) + " press " + ("blocked" if info[1] == "ghost" else "allowed")
+                            if self.is_debug:
+                                # abbreviate event
+                                btn_str = ("".join([word[0].upper() for word in btn_str.split()])) + " @ " + str(
+                                    info[0].strftime('%H:%M:%S.%f')[:-3])
+                            buttons.append("Joy " + str(button) + ": " + btn_str)
+                        breakdown = "(" + ("  |  ".join(buttons)) + ")"
 
                         # if we're in debug mode
                         if self.is_debug:
@@ -196,14 +198,15 @@ class Logger:
     def compute_delta(self, current_time=None):
         if self.delta['previous']:
             self.delta['string'] = ""
-            self.delta['difference'] = max(current_time - self.delta['previous'], 0)
+            self.delta['difference'] = current_time - self.delta['previous']
             # if the difference is within the threshold (~1.666 seconds for now... configurable?)
-            if self.delta['difference'] < self.delta['threshold']:
+            if self.delta['difference'].total_seconds() < self.delta['threshold']:
                 self.delta['pips'] = round(
-                    self.delta['max_pips'] * (1 - (self.delta['difference'] / self.delta['threshold'])))
+                    self.delta['max_pips'] * (1 - (self.delta['difference'].total_seconds() / self.delta['threshold'])))
                 if self.delta['pips'] > 0:
                     self.delta['string'] = "  +" + str(
-                        round(self.delta['difference'] * 1000)) + "ms  [" + ("*" * self.delta['pips']) + "]"
+                        round(self.delta['difference'].total_seconds() * 1000)) + "ms  [" + (
+                                                       "*" * self.delta['pips']) + " Possible Ghost Press Allowed?]"
         self.delta['previous'] = current_time
 
     def summarize(self):
@@ -563,6 +566,11 @@ log("Settings:")
 log("   Button Filtering Threshold", str(button_filtering_threshold) + " buttons")
 log("   Button Filtering Sensitivity", str(button_filtering_sensitivity) + " millisecond evaluation window")
 log("   Debugging mode", "Enabled" if logging_is_debug else "Disabled")
+if(logging_is_debug):
+    log("      -   Event Code Descriptions")
+    log("              GPB", "Ghost Press Blocked (always a short press)")
+    log("              SPA", "Short Press Allowed")
+    log("              LPA", "Long Press Allowed")
 
 # Output VJoy configuration to log, to show Windows (GUIDs) <-> Joystick Gremlin (Vjoy IDs) assignment
 log("")
