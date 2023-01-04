@@ -50,6 +50,7 @@ class Logger:
             'complete': {},
             'archive': {}
         }
+        self.delta = {'previous': False, 'string': "", 'difference': 0, 'threshold': .5, 'pips': 0, 'max_pips': 5}
 
         # log a summary every time summary button is pressed (user configurable)
         @gremlin.input_devices.keyboard(self.summary_key, self.device.mode)
@@ -106,10 +107,10 @@ class Logger:
             return
 
         # build the event
-        current_time = round(time.time(), 3)
+        current_time = time.time()
         the_event = {
             button: [
-                current_time, "long" if still_pressed else "short", "ghost" if is_ghost else "legitimate"
+                round(current_time, 3), "long" if still_pressed else "short", "ghost" if is_ghost else "legitimate"
             ]
         }
         the_key = current_time
@@ -173,18 +174,37 @@ class Logger:
                                 "Joy " + str(button) + ": " + str(info[1]) + " " + str(info[2]) + " press " + (
                                     "blocked" if info[2] == "ghost" else "allowed") + (
                                     " @ " + str(info[0]) if self.is_debug else ""))
-                        breakdown = ", ".join(buttons)
+                        breakdown = "(" + (", ".join(buttons)) + ")"
+
+                        # if we're in debug mode
+                        if self.is_debug:
+                            # compute difference to previous entry (to flag possible missed ghost inputs)
+                            self.compute_delta(key)
+                            if state == "complete":
+                                # save all completed events into [archive]
+                                self.events['archive'].update({key: event})
 
                         # log the event
-                        self.log(
-                            msg + " [" + self.device.mode + "] " + self.device.name + " pressed " + str(
-                                len(event)) + " buttons at once", "(" + breakdown + ")", 90)
-                        # if we're in debug mode
-                        if self.is_debug and state == "complete":
-                            # save all completed events into [archive]
-                            self.events['archive'].update({key: event})
-                        # otherwise, just delete
+                        description = " [" + self.device.mode + "] " + self.device.name + " pressed " + str(
+                            len(event)) + " buttons at once"
+                        self.log(msg + description, breakdown + self.delta['string'], 90)
+
+                        # delete the entry
                         del self.events[state][key]
+
+    # compute the difference in log times, to determine if two logs were close enough to be a missed ghost input
+    def compute_delta(self, current_time=None):
+        if self.delta['previous']:
+            self.delta['string'] = ""
+            self.delta['difference'] = max(current_time - self.delta['previous'], 0)
+            # if the difference is within the threshold (~1.666 seconds for now... configurable?)
+            if self.delta['difference'] < self.delta['threshold']:
+                self.delta['pips'] = round(
+                    self.delta['max_pips'] * (1 - (self.delta['difference'] / self.delta['threshold'])))
+                if self.delta['pips'] > 0:
+                    self.delta['string'] = "  +" + str(
+                        round(self.delta['difference'] * 1000)) + "ms  [" + ("*" * self.delta['pips']) + "]"
+        self.delta['previous'] = current_time
 
     def summarize(self):
         if not self.enabled:
@@ -252,7 +272,7 @@ class FilteredDevice:
                  # device
                  physical_device, name, vjoy_id, mode,
                  # buttons
-                 button_remapping_enabled, button_filtering, button_timespan, button_sensitivity,
+                 button_remapping_enabled, button_filtering, button_filtering_sensitivity, button_filtering_threshold,
                  # axes
                  axis_remapping_enabled, axis_curve,
                  # hats
@@ -269,13 +289,10 @@ class FilteredDevice:
         self.virtual_guid = (gremlin.joystick_handling.vjoy_devices())[self.vjoy_id - 1].device_guid
         self.virtual_device = (gremlin.joystick_handling.VJoyProxy())[self.vjoy_id]
 
-        self.tick_len = .01666
-
         self.button_remapping = button_remapping_enabled
         self.button_filtering = button_filtering
-        self.button_timespan = [math.ceil(float(button_timespan) / 2) * self.tick_len,
-                                math.floor(float(button_timespan) / 2) * self.tick_len] if button_filtering else [0, 0]
-        self.button_sensitivity = button_sensitivity
+        self.button_filtering_sensitivity = button_filtering_sensitivity / 1000 if button_filtering else 0
+        self.button_filtering_threshold = button_filtering_threshold
         self.button_callbacks = {'press': defaultdict(list), 'release': defaultdict(list)}
 
         self.axis_remapping = axis_remapping_enabled
@@ -331,8 +348,8 @@ class FilteredDevice:
                             if event.is_pressed:
                                 self.logger.start_tracking(event.identifier)
 
-                            # wait the first half of the delay timespan (set number of ticks), then check for ghost inputs
-                            defer(self.button_timespan[0], self.filter_the_button, event, vjoy, joy)
+                            # wait the duration of the delay Sensitivity, then check for ghost inputs
+                            defer(self.button_filtering_sensitivity, self.filter_the_button, event, vjoy, joy)
 
     def initialize_axes(self, value=None, first_time=False):
         if first_time:
@@ -405,7 +422,7 @@ class FilteredDevice:
         # if we're filtering, and if <threshold> or more buttons (including this button) are pressed,
         # and this button is no longer still pressed, this is likely a ghost input
         is_ghost = self.button_filtering and len(
-            self.concurrent_presses) >= self.button_sensitivity and not still_pressed
+            self.concurrent_presses) >= self.button_filtering_threshold and not still_pressed
 
         # if this was initially a press
         if event.is_pressed:
@@ -416,9 +433,9 @@ class FilteredDevice:
                 # update the virtual joystick
                 self.trigger_the_button(event, vjoy, still_pressed)
 
-            # it could still be part of an ongoing ghosting event, so wait the rest of the delay and end monitoring.
+            # it could still be part of an ongoing ghosting event, so wait the duration of the Sensitivity delay and end monitoring.
             # by then, enough time will have passed that this press should no longer be used to determine a Ghost Input
-            defer(self.button_timespan[1], self.logger.end_tracking, event.identifier)
+            defer(self.button_filtering_sensitivity, self.logger.end_tracking, event.identifier)
         else:
             # always process every release
             self.trigger_the_button(event, vjoy, still_pressed)
@@ -476,9 +493,8 @@ def log(str1, str2="", width=80):
 
 # update all virtual devices with the current status from the physical devices
 def initialize_all_inputs():
-    global filtered_devices
     active_mode = gremlin.event_handler.EventHandler().active_mode
-    for id, filtered_device in filtered_devices.items():
+    for id, filtered_device in globals()['filtered_devices'].items():
         # if the new mode matches this device's mode, use the physical device input status
         # otherwise; initialize inputs to 0
         filtered_device.initialize_inputs(start_at_zero=active_mode != filtered_device.mode)
@@ -497,22 +513,22 @@ def switch_mode(mode=None):
 ui_button_remapping = BoolVariable("Enable Button Remapping?",
                                    "Actively remap button input? Required for filtering ghost inputs", True)
 ui_button_filtering = BoolVariable("  -  Enable Button Filtering?", "Actively filter ghost input?", True)
-ui_button_sensitivity = IntegerVariable("          Button Filtering Sensitivity",
-                                        "How many *buttons* pressed at once (within a timespan) constitute a Ghost Input (on a single device)? Default: 2",
-                                        2, 0, 100)
-ui_button_timespan = IntegerVariable("          Button Filtering Strength",
-                                     "Determines the timespan after a button press before checking for ghost input? Default Strength: 6",
-                                     6, 1, 20)
+ui_button_filtering_threshold = IntegerVariable("          Button Filtering Threshold",
+                                                "How many *buttons* pressed at once (within a timespan) constitute a Ghost Input (on a single device)? Default: 2",
+                                                2, 0, 100)
+ui_button_filtering_sensitivity = IntegerVariable("          Button Filtering Sensitivity (ms)",
+                                                  "Timespan (in ms) to evaluate ghost input before possibly sending to vJoy? Default: 90ms",
+                                                  90, 1, 1000)
 ui_axis_remapping = BoolVariable("Enable Axis Remapping?",
                                  "Actively remap axes? Disable if remapping them through JG GUI", True)
 ui_axis_curve = BoolVariable("  -  Smooth Response Curve?",
-                             "Adds an S curve to the vjoy output, otherwise linear",
+                             "If Axis Remapping, adds an S curve to the vJoy output, otherwise linear",
                              True)
 ui_hat_remapping = BoolVariable("Enable Hat Remapping?",
                                 "Actively remap hats? Disable if remapping them through JG GUI", True)
-ui_logging_enabled = BoolVariable("Enable Logging?", "Output useful debug info to log", True)
+ui_logging_enabled = BoolVariable("Enable Logging?", "Output useful debug info to log (Recommended)", True)
 ui_logging_is_debug = BoolVariable("  -  Debugging Mode",
-                                   "Logs every legitimate button press (instead of just Ghost Inputs)",
+                                   "Logs all button presses (Recommended only if Ghost Inputs are still getting through... tweak Sensitivity based on the log results)",
                                    False)
 ui_logging_summary_key = StringVariable("  -  Generate a Summary with Key",
                                         "Which keyboard key to press to get a Ghost Input summary breakdown in the log?",
@@ -522,8 +538,8 @@ ui_logging_summary_key = StringVariable("  -  Generate a Summary with Key",
 button_remapping_enabled = bool(
     ui_button_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 button_filtering = bool(ui_button_filtering.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
-button_sensitivity = ui_button_sensitivity.value
-button_timespan = ui_button_timespan.value
+button_filtering_threshold = ui_button_filtering_threshold.value
+button_filtering_sensitivity = ui_button_filtering_sensitivity.value
 
 axis_remapping_enabled = bool(ui_axis_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 axis_curve = bool(ui_axis_curve.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
@@ -541,19 +557,18 @@ nicknames = defaultdict(list)
 log("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
 log("")
 log("Ghost Input Filter", "Script starting")
-log("")
-
-# Output VJoy configuration to log, to show Windows (GUIDs) <-> Joystick Gremlin (Vjoy IDs) assignment
-log("The following VJoy devices were detected:")
-for vjoy in vjoy_devices:
-    log("   VJoy #" + str(vjoy.vjoy_id), vjoy.device_guid)
 
 log("")
 log("Settings:")
-log("   Button Filtering Sensitivity", str(button_sensitivity) + " buttons")
-log("   Button Filtering Strength", str(button_timespan) + ": Roughly " + str(round(button_timespan * .01666 * 1000)) +
-    " millisecond evaluation window")
+log("   Button Filtering Threshold", str(button_filtering_threshold) + " buttons")
+log("   Button Filtering Sensitivity", str(button_filtering_sensitivity) + " millisecond evaluation window")
 log("   Debugging mode", "Enabled" if logging_is_debug else "Disabled")
+
+# Output VJoy configuration to log, to show Windows (GUIDs) <-> Joystick Gremlin (Vjoy IDs) assignment
+log("")
+log("The following VJoy devices were detected:")
+for vjoy in vjoy_devices:
+    log("   VJoy #" + str(vjoy.vjoy_id), vjoy.device_guid)
 
 # Loop through vjoy devices
 for vjoy in vjoy_devices:
@@ -589,8 +604,8 @@ for vjoy in vjoy_devices:
             mode,
             button_remapping_enabled,
             button_filtering,
-            button_timespan,
-            button_sensitivity,
+            button_filtering_sensitivity,
+            button_filtering_threshold,
             axis_remapping_enabled,
             axis_curve,
             hat_remapping_enabled,
