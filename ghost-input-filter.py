@@ -110,7 +110,7 @@ class Logger:
         current_time = time.time()
         the_event = {
             button: [
-                round(current_time, 3), "long" if still_pressed else "short", "ghost" if is_ghost else "legitimate"
+                round(current_time, 3), "ghost" if is_ghost else "long" if still_pressed else "short"
             ]
         }
         the_key = current_time
@@ -171,8 +171,8 @@ class Logger:
                         buttons = []
                         for button, info in event.items():
                             buttons.append(
-                                "Joy " + str(button) + ": " + str(info[1]) + " " + str(info[2]) + " press " + (
-                                    "blocked" if info[2] == "ghost" else "allowed") + (
+                                "Joy " + str(button) + ": " + str(info[1]) + " press " + (
+                                    "blocked" if info[1] == "ghost" else "allowed") + (
                                     " @ " + str(info[0]) if self.is_debug else ""))
                         breakdown = "(" + (", ".join(buttons)) + ")"
 
