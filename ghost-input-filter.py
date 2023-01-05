@@ -52,7 +52,7 @@ class Logger:
             'archive': {}
         }
         # keep track of time between virtual button presses
-        self.delta = Delta(.5, self.is_debug)
+        self.delta = Delta(.5)
 
         # log a summary every time summary button is pressed (user configurable)
         @gremlin.input_devices.keyboard(self.summary_key, self.device.mode)
@@ -85,20 +85,19 @@ class Logger:
         log("          [" + self.device.mode + "] " + self.device.name + " to VJoy #" + str(
             self.device.vjoy_id) + " is Ready!")
 
-    def start_tracking(self, btn_id):
-        self.device.concurrent_presses.add(btn_id)
+    def start_tracking(self, the_event):
+        self.device.concurrent_presses[the_event.e.identifier] = the_event
 
-    def update_tracking(self, event, still_pressed):
+    def update_tracking(self, the_event):
 
         if not self.enabled:
             return
 
         concurrent_presses = set(self.device.concurrent_presses)
-        button = event.identifier
-        is_ghost = self.device.is_ghost(event)
+        button = the_event.e.identifier
 
         # determine event type
-        event_type = "blocked" if is_ghost else "allowed"
+        event_type = "blocked" if the_event.is_ghost else "allowed"
 
         # on press, increment the counters
         self.counts[event_type]['total'] += 1
@@ -107,15 +106,15 @@ class Logger:
         self.counts[event_type]['by_combination'][str(sorted(concurrent_presses))] += 1.0 / len(concurrent_presses)
 
         # bail if not is_debug (don't need to track legitimate presses)
-        if not is_ghost and not self.is_debug:
+        if not the_event.is_ghost and not self.is_debug:
             return
 
         current_time = datetime.now()
 
-        # build the event
-        the_event = {
+        # build the virtual event
+        the_virtual_event = {
             button: [
-                current_time, "ghost" if is_ghost else "long" if still_pressed else "short"
+                current_time, "ghost" if the_event.is_ghost else "long" if the_event.is_still_pressed else "short"
             ]
         }
         the_key = current_time
@@ -126,14 +125,14 @@ class Logger:
             if concurrent_presses.intersection(set(event.keys())):
                 # merge the current event with this saved event (keeping the key of the earliest matching event)
                 the_key = key
-                the_event.update(event)
+                the_virtual_event.update(event)
                 break
 
         # update the extant event with the larger set or create a new event entry
-        self.events['in_progress'].update({the_key: the_event})
+        self.events['in_progress'].update({the_key: the_virtual_event})
 
-    def end_tracking(self, btn_id):
-        self.device.concurrent_presses.discard(btn_id)
+    def end_tracking(self, the_event):
+        del self.device.concurrent_presses[the_event.e.identifier]
 
         # if this is the end of the ghosting event, flush the tracking log
         if len(self.device.concurrent_presses) <= 0:
@@ -183,7 +182,7 @@ class Logger:
                         breakdown = "(" + ("  |  ".join(buttons)) + ")"
 
                         # compute difference to previous entry (to flag possible missed ghost inputs)
-                        self.delta.compute(key, flag=True)
+                        self.delta.compute(key)
                         # if we're in debug mode
                         if self.is_debug:
                             if state == "complete":
@@ -193,7 +192,8 @@ class Logger:
                         # log the event
                         description = " [" + self.device.mode + "] " + self.device.name + " pressed " + str(
                             len(event)) + " buttons at once"
-                        self.log(msg + description, breakdown + self.delta.string, 90)
+                        flag = self.delta.flag() if self.is_debug else ""
+                        self.log(msg + description, breakdown + flag, 90)
 
                         # delete the entry
                         del self.events[state][key]
@@ -258,48 +258,94 @@ class Logger:
         log(*args)
 
 
+# class to keep track of button press events
+class Event:
+    def __init__(self, e, device):
+        self.e = e
+        self.device = device
+        # if this is a press (not a release), get the current time and calculate the timespan since the last press
+        self.delta = device.delta.clone() if e.is_pressed else None
+        self.is_still_pressed = None
+        self.is_filtering = None
+        self.is_button_threshold = None
+        self.is_time_threshold = None
+        self.is_concurrent_time_threshold = None
+        self.is_ghost = None
+
+    # evaluate if a ghost input (only on press)
+    def evaluate(self):
+        # filtering enabled?
+        self.is_filtering = self.device.button_filtering
+        # multiple simultaneous buttons above threshold?
+        self.is_button_threshold = len(self.device.concurrent_presses) >= self.device.button_filtering_threshold
+        # was this press too close to the press before it?
+        self.is_time_threshold = self.delta.within_threshold
+
+        # is this press too close to any of the presses after or during it?
+        self.is_concurrent_time_threshold = False
+        for key, event in self.device.concurrent_presses.items():
+            if key == self.e.identifier:
+                continue
+            if self.delta.compare(event.delta.time):
+                self.is_concurrent_time_threshold = True
+                break
+
+        # a ghost press if
+        # 1) filtering is enabled,
+        # 2) more than <threshold> buttons are pressed at once,
+        # 3) it's not still pressed,
+        # or 4) it is still pressed but was very close to previous/next press(es)
+        self.is_ghost = self.is_filtering and \
+                        self.is_button_threshold and \
+                        not self.is_still_pressed or \
+                        (
+                                self.is_still_pressed and (self.is_time_threshold or self.is_concurrent_time_threshold)
+                        )
+
+
 # class to keep track of time difference between log events
 class Delta:
-    def __init__(self, threshold, is_debug):
-        self.previous = False
-        self.string = ""
-        self.difference = datetime.now() - datetime.now()
+    def __init__(self, threshold, time=None, difference=None, within_threshold=False):
         self.threshold = threshold
-        self.within_threshold = False
-        self.is_debug = is_debug
-        self.pips = 0
-        self.max_pips = 5
+        self.time = time if time else datetime.now()
+        self.difference = difference if difference else (datetime.now() - datetime.now())
+        self.within_threshold = within_threshold
 
     # compute the difference in log times, to determine if two logs were close enough to be a ghost input or missed ghost input
-    def compute(self, current_time=None, flag=False):
+    def compute(self, current_time=None):
         if current_time is None:
             current_time = datetime.now()
-        if self.previous:
-            self.string = ""
-            self.difference = current_time - self.previous
-            self.within_threshold = self.difference.total_seconds() < self.threshold
+        if self.time:
+            self.within_threshold = self.compare(current_time)
+        self.time = current_time
 
-            if flag:
-                log("Delta: " + str(self))
+    def compare(self, time, threshold=None):
+        self.difference = abs(time - (self.time if self.time else datetime.now()))
+        log("the difference!", str(self.difference))
+        return self.difference.total_seconds() < (threshold if threshold else self.threshold)
 
-            # if debugging, see if the difference is within the logging threshold (~.5s for now) and flag it
-            if flag and self.is_debug and self.within_threshold:
-                self.pips = round(
-                    self.max_pips * (1 - (self.difference.total_seconds() / self.threshold)))
-                if self.pips > 0:
-                    self.string = "  +" + str(
-                        round(self.difference.total_seconds() * 1000)) + "ms  [" + (
-                                          "*" * self.pips) + " Possible Ghost Press Allowed?]"
-        self.previous = current_time
+    def clone(self, current_time=None):
+        self.compute(current_time)
+        # return a copy to save into the Event
+        return Delta(self.threshold, self.time, self.difference, self.within_threshold)
+
+    # if debugging, see if the difference is within the logging threshold (~.5s for now) and flag it
+    def flag(self):
+        if not self.within_threshold:
+            return ""
+        max_pips = 5
+        pips = round(max_pips * (1 - (self.difference.total_seconds() / self.threshold)))
+        return ("  +" + str(round(self.difference.total_seconds() * 1000)) + "ms  [" + (
+                "*" * pips) + " Possible Ghost Press Allowed?]") if pips > 0 else ""
 
 
 # class for each physical joystick device, for filtering and mapping
-class FilteredDevice:
+class Device:
     def __init__(self,
                  # device
                  physical_device, name, vjoy_id, mode,
                  # buttons
-                 button_remapping_enabled, button_filtering, button_filtering_sensitivity, button_filtering_threshold,
+                 button_remapping_enabled, button_filtering, button_filtering_window, button_filtering_minimum, button_filtering_threshold,
                  # axes
                  axis_remapping_enabled, axis_curve,
                  # hats
@@ -318,7 +364,8 @@ class FilteredDevice:
 
         self.button_remapping = button_remapping_enabled
         self.button_filtering = button_filtering
-        self.button_filtering_sensitivity = button_filtering_sensitivity / 1000 if button_filtering else 0
+        self.button_filtering_window = button_filtering_window / 1000 if button_filtering else 0
+        self.button_filtering_minimum = button_filtering_minimum / 1000 if button_filtering else 0
         self.button_filtering_threshold = button_filtering_threshold
         self.button_callbacks = {'press': defaultdict(list), 'release': defaultdict(list)}
 
@@ -330,9 +377,9 @@ class FilteredDevice:
         # Initialize debugging logging
         self.logger = Logger(self, logging_enabled, logging_is_debug, logging_summary_key)
 
-        self.concurrent_presses = set()
+        self.concurrent_presses = dict()
         # keep track of time between physical button presses
-        self.delta = Delta(.05, self.logger.is_debug)
+        self.delta = Delta(self.button_filtering_minimum)
 
         # create the decorator
         self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
@@ -373,14 +420,13 @@ class FilteredDevice:
                         @self.decorator.button(btn._index)
                         # pass that info to the function that will check other button presses
                         def callback(event, vjoy, joy):
-                            # increment total buttons counter for this device (if this is a press)
-                            if event.is_pressed:
-                                self.logger.start_tracking(event.identifier)
-                                # get the current time and calculate the timespan since the last button press
-                                self.delta.compute()
+                            the_event = Event(event, device=self)
+                            if the_event.e.is_pressed:
+                                # increment total buttons counter for this device (if this is a press)
+                                self.logger.start_tracking(the_event)
 
-                            # wait the duration of the delay Sensitivity, then check for ghost inputs
-                            defer(self.button_filtering_sensitivity, self.filter_the_button, event, vjoy, joy)
+                            # wait the duration of the delay Window, then check for ghost inputs
+                            defer(self.button_filtering_window, self.filter_the_button, the_event, vjoy, joy)
 
     def initialize_axes(self, value=None, first_time=False):
         if first_time:
@@ -443,56 +489,50 @@ class FilteredDevice:
     def get_hat(self, id):
         return self.physical_device.hat(id).direction
 
-    def is_ghost(self, event):
-        # @TODO: Need to come up with a way to evaluate if there was a very close button press AFTER the initial one...
-        return event.is_ghost['is_filtering'] and event.is_ghost['is_button_threshold'] and (
-                not event.is_ghost['is_still_pressed'] and event.is_ghost['is_time_threshold'])
-
     # checks total number of buttons pressed, every time a new button is pressed within the configured timespan
     # and maps the physical device to the virtual device if NOT a ghost input
-    def filter_the_button(self, event, vjoy, joy):
+    def filter_the_button(self, the_event, vjoy, joy):
 
         # get the current state (after this much delay)
-        still_pressed = joy[event.device_guid].button(event.identifier).is_pressed
+        the_event.is_still_pressed = joy[the_event.e.device_guid].button(the_event.e.identifier).is_pressed
 
         # if this was initially a press
-        if event.is_pressed:
+        if the_event.e.is_pressed:
 
             # if we're filtering, and if <threshold> or more buttons (including this button) are pressed,
             # and this button is no longer still pressed OR the time difference is very small,
             # this is likely a ghost input
-            event.is_ghost = {'is_filtering': self.button_filtering,
-                              'is_button_threshold': len(self.concurrent_presses) >= self.button_filtering_threshold,
-                              'is_still_pressed': still_pressed, 'is_time_threshold': self.delta.within_threshold}
-            # track this event
-            self.logger.update_tracking(event, still_pressed)
-            # if this is not a ghost input
-            if not self.is_ghost(event):
-                # update the virtual joystick
-                self.trigger_the_button(event, vjoy, still_pressed)
+            the_event.evaluate()
 
-            # it could still be part of an ongoing ghosting event, so wait the duration of the Sensitivity delay and end monitoring.
+            # track this event
+            self.logger.update_tracking(the_event)
+            # if this is not a ghost input
+            if not the_event.is_ghost:
+                # update the virtual joystick
+                self.trigger_the_button(the_event, vjoy)
+
+            # it could still be part of an ongoing ghosting event, so wait the duration of the Window delay and end monitoring.
             # by then, enough time will have passed that this press should no longer be used to determine a Ghost Input
-            defer(self.button_filtering_sensitivity, self.logger.end_tracking, event.identifier)
+            defer(self.button_filtering_window, self.logger.end_tracking, the_event)
         else:
             # always process every release
-            self.trigger_the_button(event, vjoy, still_pressed)
+            self.trigger_the_button(the_event, vjoy)
 
     # update the virtual joystick
-    def trigger_the_button(self, event, vjoy, new_value):
-        the_button = vjoy[self.vjoy_id].button(event.identifier)
-        the_button.is_pressed = new_value
+    def trigger_the_button(self, the_event, vjoy):
+        the_button = vjoy[self.vjoy_id].button(the_event.e.identifier)
+        the_button.is_pressed = the_event.is_still_pressed
 
         # execute any decorated callbacks from custom code that match this key
-        # via @filtered_device.on_virtual_press(id)
-        if event.is_pressed and event.identifier in self.button_callbacks['press']:
+        # via @device.on_virtual_press(id)
+        if the_event.e.is_pressed and the_event.e.identifier in self.button_callbacks['press']:
             # allowing for multiple callbacks per button
-            for callback in self.button_callbacks['press'][event.identifier]:
+            for callback in self.button_callbacks['press'][the_event.e.identifier]:
                 callback()
-        # via @filtered_device.on_virtual_release(id)
-        if not event.is_pressed and event.identifier in self.button_callbacks['release']:
+        # via @device.on_virtual_release(id)
+        if not the_event.e.is_pressed and the_event.e.identifier in self.button_callbacks['release']:
             # allowing for multiple callbacks per button
-            for callback in self.button_callbacks['release'][event.identifier]:
+            for callback in self.button_callbacks['release'][the_event.e.identifier]:
                 callback()
 
     # decorator for registering custom callbacks when a virtual button was successfully pressed
@@ -532,10 +572,10 @@ def log(str1, str2="", width=80):
 # update all virtual devices with the current status from the physical devices
 def initialize_all_inputs():
     active_mode = gremlin.event_handler.EventHandler().active_mode
-    for id, filtered_device in globals()['filtered_devices'].items():
+    for id, device in globals()['filtered_devices'].items():
         # if the new mode matches this device's mode, use the physical device input status
         # otherwise; initialize inputs to 0
-        filtered_device.initialize_inputs(start_at_zero=active_mode != filtered_device.mode)
+        device.initialize_inputs(start_at_zero=active_mode != device.mode)
 
 
 # switch modes and update all input states (synchronizes button states after a mode switch to prevent latching)
@@ -552,11 +592,14 @@ ui_button_remapping = BoolVariable("Enable Button Remapping?",
                                    "Actively remap button input? Required for filtering ghost inputs", True)
 ui_button_filtering = BoolVariable("  -  Enable Button Filtering?", "Actively filter ghost input?", True)
 ui_button_filtering_threshold = IntegerVariable("          Button Filtering Threshold",
-                                                "How many *buttons* pressed at once (within a timespan) constitute a Ghost Input (on a single device)? Default: 2",
-                                                2, 0, 100)
-ui_button_filtering_sensitivity = IntegerVariable("          Button Filtering Sensitivity (ms)",
-                                                  "Timespan (in ms) to evaluate ghost input before possibly sending to vJoy? Default: 90ms",
+                                                "How many *buttons* pressed at once (within a timespan) constitute a Ghost Input (on a single device)? Lower = Less Ghosting, Higher = More User Presses Allowed. Default: 2",
+                                                2, 0, 10)
+ui_button_filtering_window = IntegerVariable("          Evaluate Press After (ms)",
+                                                  "Delay (in ms) to evaluate ghost input before possibly sending to vJoy? Lower = More Simultaneous Presses Allowed, Higher = Less Ghosting. Default: 90ms",
                                                   90, 1, 1000)
+ui_button_filtering_minimum = IntegerVariable("          Presses Allowed If (ms) Apart",
+                                                  "Timespan (in ms) between buttons that simultaneous presses are allowed? Lower = Quicker User Presses, Higher = Less Ghosting. Default: 10ms",
+                                                  10, 1, 1000)
 ui_axis_remapping = BoolVariable("Enable Axis Remapping?",
                                  "Actively remap axes? Disable if remapping them through JG GUI", True)
 ui_axis_curve = BoolVariable("  -  Smooth Response Curve?",
@@ -566,7 +609,7 @@ ui_hat_remapping = BoolVariable("Enable Hat Remapping?",
                                 "Actively remap hats? Disable if remapping them through JG GUI", True)
 ui_logging_enabled = BoolVariable("Enable Logging?", "Output useful debug info to log (Recommended)", True)
 ui_logging_is_debug = BoolVariable("  -  Debugging Mode",
-                                   "Logs all button presses (Recommended only if Ghost Inputs are still getting through... tweak Sensitivity based on the log results)",
+                                   "Logs all button presses (Recommended only if Ghost Inputs are still getting through... tweak Window based on the log results)",
                                    False)
 ui_logging_summary_key = StringVariable("  -  Generate a Summary with Key",
                                         "Which keyboard key to press to get a Ghost Input summary breakdown in the log?",
@@ -577,7 +620,8 @@ button_remapping_enabled = bool(
     ui_button_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 button_filtering = bool(ui_button_filtering.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 button_filtering_threshold = ui_button_filtering_threshold.value
-button_filtering_sensitivity = ui_button_filtering_sensitivity.value
+button_filtering_window = ui_button_filtering_window.value
+button_filtering_minimum = ui_button_filtering_minimum.value
 
 axis_remapping_enabled = bool(ui_axis_remapping.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
 axis_curve = bool(ui_axis_curve.value)  # joystick gremlin has an issue with BoolVariable persistence(?)
@@ -599,7 +643,8 @@ log("Ghost Input Filter", "Script starting")
 log("")
 log("Settings:")
 log("   Button Filtering Threshold", str(button_filtering_threshold) + " buttons")
-log("   Button Filtering Sensitivity", str(button_filtering_sensitivity) + " millisecond evaluation window")
+log("   Button Filtering Window", str(button_filtering_window) + " millisecond evaluation window")
+log("   Button Filtering Minimum", str(button_filtering_minimum) + " millisecond button event separation")
 log("   Debugging mode", "Enabled" if logging_is_debug else "Disabled")
 if (logging_is_debug):
     log("      -   Event Code Descriptions")
@@ -629,10 +674,10 @@ for vjoy in vjoy_devices:
         device_guid = str(vars()["ui_physical_device_" + vjoy_id].value['device_id'])
 
         # create physical device proxy
-        device = (gremlin.input_devices.JoystickProxy())[gremlin.profile.parse_guid(device_guid)]
+        device_proxy = (gremlin.input_devices.JoystickProxy())[gremlin.profile.parse_guid(device_guid)]
 
         # generate a unique but shorter name for this device
-        name = device._info.name
+        name = device_proxy._info.name
         nickname = "Stick" if "stick" in name.lower() else "Throttle" if "throttle" in name.lower() else name
         nickname = nickname if nickname not in nicknames or device_guid in nicknames[
             nickname] else nickname + " " + str(len(nicknames[nickname]) + 1)
@@ -640,14 +685,15 @@ for vjoy in vjoy_devices:
 
         # create a filtered device for each vjoy device that is getting remapped
         # Initialize filtered device (which creates decorators to listen for and filter input)
-        filtered_device = FilteredDevice(
-            device,
+        device = Device(
+            device_proxy,
             nickname,
             int(vjoy_id),
             mode,
             button_remapping_enabled,
             button_filtering,
-            button_filtering_sensitivity,
+            button_filtering_window,
+            button_filtering_minimum,
             button_filtering_threshold,
             axis_remapping_enabled,
             axis_curve,
@@ -656,18 +702,18 @@ for vjoy in vjoy_devices:
             logging_is_debug,
             logging_summary_key
         )
-        filtered_devices[int(vjoy_id)] = filtered_device
+        filtered_devices[int(vjoy_id)] = device
 
         # Custom Callbacks
         # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
 
         # Example:
         # if name == "Stick":
-        #     @filtered_device.on_virtual_press(<button id>)
+        #     @device.on_virtual_press(<button id>)
         #     def custom_callback():
         #         # do something here
 
-        #     @filtered_device.on_virtual_release(<button id>)
+        #     @device.on_virtual_release(<button id>)
         #     def custom_callback():
         #         # do something here
 
