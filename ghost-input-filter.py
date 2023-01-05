@@ -321,7 +321,6 @@ class Delta:
 
     def compare(self, time, threshold=None):
         self.difference = abs(time - (self.time if self.time else datetime.now()))
-        log("the difference!", str(self.difference))
         return self.difference.total_seconds() < (threshold if threshold else self.threshold)
 
     def clone(self, current_time=None):
