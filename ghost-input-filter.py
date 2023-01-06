@@ -39,11 +39,6 @@ class Device:
         self.logger = Logger(settings.device, self)
         self.events = Events(self)
 
-        # keep track of time between physical button presses
-        self.delta = Delta(self.buttons.minimum)
-
-        self.concurrent_presses = dict()
-
         # create the decorator
         self.decorator = gremlin.input_devices.JoystickDecorator(self.name, str(self.physical_guid), self.mode)
 
@@ -85,14 +80,14 @@ class Device:
                         def callback(event, vjoy, joy):
                             the_button = Button(event, self)
                             if the_button.is_pressed:
-                                # increment total buttons counter for this device and start tracking (if this is a press)
+                                # add this button to the active_event
                                 self.events.start_tracking(the_button)
                             else:
                                 # search for a corresponding press in the event log...
                                 # if it's far enough from this release, it's a legitimate release, and we should update
                                 # the button and execute the release callbacks
-                                if self.events.active.find_button(the_button):
-                                    the_button.connect_to_event(self.events.active)
+                                if self.events.active_event.find_button(the_button):
+                                    the_button.connect_to_event(self.events.active_event)
 
                                     # wait the duration of the delay Wait Time, then check for ghost inputs
                             defer(self.buttons.wait_time, self.filter_the_button, the_button, vjoy, joy)
@@ -165,6 +160,9 @@ class Device:
         # get the current state (after this much delay)
         the_button.is_still_pressed = joy[the_button.device_guid].button(the_button.identifier).is_pressed
 
+        # update the button's virtual timestamp and determine if is_ghost input
+        the_button.evaluate_button()
+
         # if this was initially a press
         if the_button.is_pressed:
             # update this event
@@ -173,10 +171,8 @@ class Device:
             # it could still be part of an ongoing ghosting event, so wait the duration of the Wait Time delay and end monitoring.
             # by then, enough time will have passed that this press should no longer be used to determine a Ghost Input
             defer(self.buttons.wait_time, the_button.event.end_tracking, the_button)
-        else:
-            the_button.update_button()
 
-        if not the_button.is_ghost():
+        if not the_button.is_ghost:
             # update the virtual button
             vjoy[self.vjoy_id].button(the_button.identifier).is_pressed = the_button.is_still_pressed
 
@@ -219,8 +215,6 @@ class Logger:
             'elapsed_time': 0.0,
             'rate': 0.0
         }
-        # keep track of time between virtual button presses
-        self.delta = Delta(.5)
 
         # log a summary every time summary button is pressed (user configurable)
         @gremlin.input_devices.keyboard(self.summary_key, self.parent.mode)
@@ -254,6 +248,7 @@ class Logger:
             self.parent.vjoy_id) + " is Ready!")
 
     def summarize(self):
+
         if not self.enabled:
             return
 
@@ -319,11 +314,10 @@ class Logger:
 class Events:
     def __init__(self, parent):
         self.parent = parent
-        self.active = Event(parent=self)
+        self.active_event = Event(self)
+        self.last_event = None
         self.in_progress = EventList("in_progress", parent=self)
         self.complete = EventList("complete", parent=self)
-        self.archive = EventList("archive", parent=self)
-        self.last_event = None
         self.totals = {
             'allowed': {
                 'total': 0,
@@ -343,32 +337,19 @@ class Events:
         if not self.parent.buttons.enabled:
             return
 
-        self.active.add_button(the_button)
+        self.active_event.add_button(the_button)
 
+    # increment totals and update the in_progress event list with changes from active_event
     def update_tracking(self, the_button):
         if not self.parent.buttons.enabled:
             return
 
-        # update the button's virtual timestamp, event, and totals
-        the_button.update_button()
-
-        # TODO: is this necessary, or is it already pointing to that button and will thus get the update?
-        # test: IF THIS IS UNECESSARY, THESE TWO LOGS SHOULD BE IDENTICAL...
-        test_btn = self.active.find_button(the_button)
-        if test_btn:
-            log(str(test_btn.virtual_time))
-        self.active.update_event(the_button)
-        # test:
-        test_btn = self.active.find_button(the_button)
-        if test_btn:
-            log(str(test_btn.virtual_time))
-
         self.increment_totals(the_button)
 
-        # clone the active event, so we can save it to in_progress and non-destructively remove its buttons later
-        active_event = self.active.clone_event()
+        # clone the active event, so we can save it to in_progress (and non-destructively remove its buttons later)
+        active_event = self.active_event.clone_event()
         # find the in-progress event
-        the_event = self.in_progress.find_event(the_button)
+        the_event = self.in_progress.find_similar_event(active_event)
         if the_event:
             # and update it with the current state of active
             the_event.merge_event(active_event)
@@ -380,30 +361,24 @@ class Events:
         if not self.parent.buttons.enabled:
             return
 
-        self.active.remove_button(the_button)
+        # remove this button from active_event. It should no longer be used to determine ghost inputs
+        self.active_event.remove_button(the_button)
 
-        # if this is the end of the ghosting event, flush the tracking log
-        if len(self.active.concurrent_buttons()) <= 0:
-            self.finalize_tracking()
-
-    # when no more concurrent presses are detected, move all current events to Complete
-    def finalize_tracking(self):
-        if not self.parent.buttons.enabled:
-            return
-
-        # mark in_progress events as complete
-        # self.in_progress.move_events_to(self.complete)
-        # output appropriate events to the log
-        self.in_progress.flush_events()
+        # if this is the end of the ghosting event
+        if len(self.active_event.buttons) <= 0:
+            # output appropriate events to the log
+            self.in_progress.flush_events()
+            # and reinitialize the active Event
+            self.active_event = Event(self)
 
     def increment_totals(self, the_button):
 
         # generate a sorted set from the buttons in this event
-        concurrent_presses = self.active.concurrent_buttons()
+        concurrent_presses = sorted(set(self.active_event.buttons.keys()))
         size = len(concurrent_presses)
 
         # determine event type for this button press
-        event_type = "blocked" if the_button.is_ghost() else "allowed"
+        event_type = "blocked" if the_button.is_ghost else "allowed"
 
         # on press, increment the counters
         self.totals[event_type]['total'] += 1
@@ -422,15 +397,17 @@ class EventList:
     def has_events(self):
         return len(self.list) > 0
 
-    def create_event(self, the_button):
-        the_event = Event(the_button=the_button, parent=self.parent)
-        self.list[the_event.id] = the_event
-        return the_event
+    # def create_event(self, the_button):
+    #     the_event = Event(self)
+    #     the_event.add_button(the_button)
+    #     self.list[the_event.id] = the_event
+    #     return the_event
 
-    def find_event(self, the_button):
+    # search this event list for an event that intersects
+    def find_similar_event(self, the_event):
         for key, event in list(self.list.items()):
-            # if this combination is found in the current ghosting/legitimate events
-            if event.find_button(the_button):
+            # if any buttons in this combination are found in an event in this event list
+            if set(event.buttons.keys()).intersection(set(the_event.buttons.keys())):
                 return event
         return None
 
@@ -441,16 +418,16 @@ class EventList:
         del self.list[the_event.id]
 
     def move_event_to(self, the_event, the_event_list):
-        # move to a new list @TODO: possibly need to clone event... check if reference issues
-        the_event_list.add_event({the_event.id: the_event})
+        # move to a new list
+        the_event_list.add_event({the_event.id: the_event.clone_event()})
         # and remove from this list
         self.remove_event(the_event)
 
     # output all registered ghosting/legitimate events and flush the list
-    def move_events_to(self, the_event_list):
-        # for each event
-        for key, event in list(self.list.items()):
-            self.move_event_to(event, the_event_list)
+    # def move_events_to(self, the_event_list):
+    #     # for each event
+    #     for key, event in list(self.list.items()):
+    #         self.move_event_to(event, the_event_list)
 
     def flush_events(self):
         if self.has_events():
@@ -459,7 +436,7 @@ class EventList:
                 # if any button in the event was blocked, this is a ghosting event
                 event_type = event.get_type()
 
-                # for each event, generate a message based on the event_type
+                # generate an event message
                 if event_type is "blocked":
                     msg = "> GHOST INPUTS blocked!"
                 elif event_type is "allowed" and self.parent.debug:
@@ -469,6 +446,7 @@ class EventList:
                         msg = "> USER PRESS allowed:"
                 else:
                     msg = False
+
                 # output a message (if we should)
                 if msg:
                     # build human-readable button breakdown string
@@ -482,10 +460,10 @@ class EventList:
                         buttons_string.append("Joy " + str(id) + ": " + btn_str)
                     breakdown = "(" + ("  |  ".join(buttons_string)) + ")"
 
-                    # compute difference to previous entry (to flag possible missed ghost inputs)
-                    if self.parent.last_event and event.is_within_threshold(self.parent.last_event, .5):
-                        # if debugging, see if the difference is within the logging threshold (~.5s for now) and flag it
-                        breakdown += event.flag_event()
+                    # if debugging, compute difference to previous entry (to flag possible missed ghost inputs)
+                    if self.parent.last_event and self.grand_parent.debug:
+                        # see if the difference is within the logging threshold (~.5s for now) and flag it
+                        breakdown += event.get_flag(self.parent.last_event, .5)
                     self.parent.last_event = event.clone_event()
 
                     # if we're in debug mode
@@ -502,46 +480,35 @@ class EventList:
                     self.remove_event(event)
 
 
-# group of "Button"-press events
+# a group of simultaneous Button presses
 class Event:
-    def __init__(self, start_time=None, end_time=None, delta=None, threshold=None, id=None, buttons=None, flag=None,
-                 the_button=None, parent=None):
+    def __init__(self, parent, start_time=None, end_time=None, delta=None, id=None, buttons=None):
         self.parent = parent
         self.grand_parent = parent.parent
         self.start_time = start_time if start_time else datetime.now()
         self.end_time = end_time if end_time else None
         self.delta = delta if delta else None
-        self.threshold = threshold if threshold else self.grand_parent.buttons.min_interval
         self.id = id if id else str(self.start_time)
         self.buttons = buttons if buttons else {}
-        self.flag = flag if flag else None
 
-        if the_button:
-            self.add_button(the_button)
+    def is_ghost_event(self):
+        return any(True in button.is_ghost for button in self.buttons.values())
 
-    def is_ghost(self):
-        return any(True in button.evaluation for button in self.buttons.values())
+    def is_within_threshold(self, event, threshold):
+        self.delta = abs(event.start_time - self.start_time)
+        return self.delta.total_seconds() < threshold
 
     def get_type(self):
-        return "blocked" if self.is_ghost() else "allowed"
+        return "blocked" if self.is_ghost_event() else "allowed"
 
-    def is_within_threshold(self, event, threshold=None):
-        self.delta = abs(event.start_time - self.start_time)
-        self.threshold = (threshold if threshold else self.threshold)
-        return self.delta.total_seconds() < self.threshold
-
-    def is_within_min_interval(self):
-        last_event = self.parent.last_event if isinstance(self.parent, Events) else self.grand_parent.last_event
-        return self.is_within_threshold(last_event)
-
-    def flag_event(self):
-        if self.grand_parent.debug:
-            return ""
-
-        max_pips = 5
-        pips = round(max_pips * (1 - (self.delta.total_seconds() / self.threshold)))
-        return ("  +" + str(round(self.delta.total_seconds() * 1000)) + "ms  [" + (
-                "*" * pips) + " Possible Ghost Press Allowed?]") if pips > 0 else ""
+    def get_flag(self, event, threshold):
+        if self.is_within_threshold(event, threshold):
+            max_pips = 5
+            pips = round(max_pips * (1 - (self.delta.total_seconds() / threshold)))
+            if pips > 0:
+                return ("  +" + str(round(self.delta.total_seconds() * 1000)) + "ms  [" + (
+                        "*" * pips) + " Possible Ghost Press Allowed?]")
+        return ""
 
     def find_button(self, the_button):
         self.buttons.get(the_button.identifier)
@@ -563,17 +530,11 @@ class Event:
         # and add to the concurrent buttons dict
         self.buttons[the_button.identifier] = the_button
 
-    def concurrent_buttons(self):
-        return sorted(set(self.buttons.keys()))
-
-    def clone_event(self):
-        return Event(
-            start_time=self.start_time, end_time=self.end_time, delta=self.delta, threshold=self.threshold,
-            id=str(self.id), buttons=dict(self.buttons), flag=self.flag, parent=self.parent
-        )
-
     def merge_event(self, the_event):
         self.buttons.update(dict(the_event.buttons))
+
+    def clone_event(self):
+        return Event(self.parent, self.start_time, self.end_time, self.delta, str(self.id), dict(self.buttons))
 
 
 # single button-press event
@@ -585,59 +546,33 @@ class Button:
         self.device_guid = e.device_guid
         self.is_pressed = e.is_pressed
         self.is_still_pressed = None
-        self.evaluation = None
+        self.is_ghost = None
         self.type = None
         self.physical_time = datetime.now()
         self.virtual_time = None
         self.delta = None
-        self.threshold = parent.buttons.wait_time
 
     def connect_to_event(self, the_event):
         self.event = the_event
 
-    def update_button(self):
+    def evaluate_button(self):
         self.virtual_time = datetime.now()
-        self.evaluation = self.is_ghost()
-        self.type = "ghost" if self.is_ghost() else "released" if not self.is_pressed else (
+        self.is_ghost = self.is_ghost_press() if self.is_pressed else self.is_ghost_release()
+        self.type = "ghost" if self.is_ghost else "released" if not self.is_pressed else (
             "long" if self.is_still_pressed else "short")
-
-    def is_within_threshold(self, button, threshold=None):
-        self.delta = abs(button.physical_time - self.physical_time)
-        self.threshold = (threshold if threshold else self.threshold)
-        return self.delta.total_seconds() < self.threshold
-
-    def is_within_wait_time(self):
-        for key, button in self.event.buttons.items():
-            if key == self.identifier:
-                continue
-            if self.is_within_threshold(button):
-                return True
-        return False
-
-    # evaluate if a ghost input (only on press)
-    def is_ghost(self):
-        # getter
-        if self.evaluation is not None:
-            return self.evaluation
-
-        # setter
-        return self.is_ghost_press() if self.is_pressed else self.is_ghost_release()
 
     # ghost conditions for a press
     def is_ghost_press(self):
         # filtering enabled?
         is_filtering = self.parent.buttons.filter
         # multiple simultaneous buttons above threshold?
-        is_max_concurrent = len(self.event.concurrent_buttons()) > self.parent.buttons.max_concurrent
-        # was this press part of the same event (within the wait_time)?
-        # @TODO: if this button is in an event with any other buttons at all by this time, it should be the same event...
-        is_same_event = self.is_within_wait_time()
-        # is this press too close to any of the presses after or during it?
-        is_min_interval = self.event.is_within_min_interval()
+        is_max_concurrent = len(self.event.buttons) > self.parent.buttons.max_concurrent
+        # is this press too close to any of the press events before it?
+        is_min_interval = self.event.is_within_threshold(self.parent.events.last_event,
+                                                         self.parent.buttons.min_interval)
         # could this be a legitimate long press (if strict mode is off)?
-        is_legitimate_long_press = False if self.parent.buttons.is_strict else (
-                not self.is_still_pressed or (is_same_event or is_min_interval)
-        )
+        is_legitimate_long_press = (
+                self.is_still_pressed and not is_min_interval) if not self.parent.buttons.is_strict else False
 
         # a ghost press if
         # 1) filtering is enabled,
@@ -652,7 +587,7 @@ class Button:
         is_filtering = self.parent.buttons.filter
 
         # get the corresponding press event, if exists
-        is_corresponding_ghost_press = self.event.is_ghost() if self.event else False
+        is_corresponding_ghost_press = self.event.is_ghost_event() if self.event else False
 
         # a ghost release if
         # 1) filtering is enabled,
