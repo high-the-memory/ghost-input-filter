@@ -146,6 +146,15 @@ class Device:
                             # (perhaps later: Filtering algorithm? Right now, 1:1)
                             vjoy[self.vjoy_id].hat(event.identifier).direction = event.value
 
+    def get_button(self, id):
+        return self.physical_device.button(id).is_pressed
+
+    def get_axis(self, id):
+        return self.physical_device.axis(id).value
+
+    def get_hat(self, id):
+        return self.physical_device.hat(id).direction
+
     # checks total number of buttons pressed, every time a new button is pressed within the configured timespan
     # and maps the physical device to the virtual device if NOT a ghost input
     def filter_the_button(self, the_button, vjoy, joy):
