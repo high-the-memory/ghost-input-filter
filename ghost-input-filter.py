@@ -67,7 +67,7 @@ class Device:
                 # initialize value (to off if explicitly set; otherwise, current value)
                 try:
                     if value is None:
-                        value = self.physical_device.button(btn._index).is_pressed
+                        value = self.get_button(btn._index)
                     self.virtual_device.button(btn._index).is_pressed = value
                 except:
                     self.logger.log("> Error initializing button " + str(btn._index) + " value")
@@ -110,7 +110,7 @@ class Device:
                 # initialize value
                 try:
                     if value is None:
-                        value = self.physical_device.axis(aid).value
+                        value = self.get_axis(aid)
                     self.virtual_device.axis(aid).value = curve(value) if self.settings.axes.curve else value
                 except:
                     self.logger.log("> Error initializing axis " + str(aid) + " value")
@@ -132,7 +132,7 @@ class Device:
                 # initialize value
                 try:
                     if value is None:
-                        value = self.physical_device.hat(hat._index).direction
+                        value = self.get_hat(hat._index)
                     self.virtual_device.hat(hat._index).direction = value
                 except:
                     self.logger.log("> Error initializing hat " + str(hat._index) + " value")
