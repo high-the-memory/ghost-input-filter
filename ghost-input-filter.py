@@ -460,7 +460,7 @@ class Event:
     def get_flag(self, last_event):
         if self.is_event_within_threshold(last_event):
             max_pips = 5
-            pips = round(max_pips * (1 - (self.delta.total_seconds() / self.threshold)))
+            pips = round(max_pips * (1 - min(self.delta.total_seconds() / self.threshold, 1.0)))
             if pips > 0:
                 return ("  ...Previous Event +" + str(round(self.delta.total_seconds() * 1000)) + "ms  [" + (
                         "*" * pips) + " Possible Ghost Press Allowed?]")
@@ -513,7 +513,10 @@ class Event:
             # build human-readable button breakdown string
             buttons_string = []
             for id, button in self.buttons.items():
-                btn_str = str(button.type) + " press " + ("blocked" if button.type == "ghost" else "allowed")
+                btn_str = ("long" if button.is_still_pressed else "short") + \
+                          (" ghost" if button.is_ghost else "") + \
+                          (" press" if button.was_a_press else " release ") + \
+                          (" blocked" if button.is_ghost else " allowed")
                 if the_device.settings.debug:
                     # abbreviate event
                     btn_str = ("".join([word[0].upper() for word in btn_str.split()])) + " @ " + str(
@@ -562,8 +565,6 @@ class Button:
     def evaluate_button(self, the_device):
         self.trigger_time = datetime.now()
         self.is_ghost = self.is_ghost_press(the_device) if self.was_a_press else self.is_ghost_release(the_device)
-        self.type = "ghost" if self.is_ghost else (
-            ("long" if self.is_still_pressed else "short") if self.was_a_press else "released")
 
     def expire(self):
         self.end_time = datetime.now()
@@ -601,12 +602,12 @@ class Button:
         is_filtering = the_device.settings.buttons.filter
 
         # get the corresponding press event, if exists
-        is_corresponding_ghost_press = the_device.events.active_event.is_ghost_event() if self.event_id else False
+        has_corresponding_ghost_press = the_device.events.active_event.is_ghost_event() if self.event_id else False
 
         # a ghost release if
         # 1) filtering is enabled,
         # 2) corresponds to a recent ghost press
-        return is_filtering and is_corresponding_ghost_press
+        return is_filtering and has_corresponding_ghost_press
 
 
 class Settings:
@@ -698,15 +699,15 @@ ui_button_latency = IntegerVariable("            Latency: Wait for <ms> to evalu
                                       20, 1, 500)
 ui_button_max_concurrent = IntegerVariable(
     "            Maybe Ghost: If more than <#> buttons are pressed simultaneously",
-    "How many buttons pressed *at once* (within the wait time) are allowed (on a single device)? Lower = Less Ghosting, Higher = More Ghosting. Default: 1",
-    1, 1, 10)
+    "How many buttons pressed *at once* (within the wait time) are allowed (on a single device)? Lower = Less Ghosting, Higher = More Ghosting. Default: 2",
+    2, 1, 10)
 ui_button_min_separation = IntegerVariable("            Maybe Ghost: If any single button press is closer than <ms> apart",
                                          "Timespan (in ms) between buttons that should trigger a Ghost filtering (even if it was registered as a single press)? Lower = More Ghosting, Higher = Less Ghosting. Default: 10ms",
                                          10, 1, 1000)
 ui_button_is_strict = BoolVariable(
     "            Strict Mode: Prevent a button even if it is still held down after the Wait Time?",
-    "Ghost Presses tend to release immediately--otherwise, tries to interpret as a real press. On = Less Ghosting, Off = More Ghosting. Default: Off",
-    False)
+    "Ghost Presses tend to release immediately--otherwise, tries to interpret as a real press. On = Less Ghosting, Off = More Ghosting. Default: On",
+    True)
 ui_axis_remapping = BoolVariable("> Enable Axis Remapping?",
                                  "Actively remap axes? Disable if remapping them through JG GUI", True)
 ui_axis_curve = BoolVariable("    -  Smooth Response Curve?",
@@ -769,9 +770,14 @@ log("   Button Filtering Minimum",
 log("   Debugging mode", "Enabled" if settings.debug else "Disabled")
 if settings.debug:
     log("      -   Event Code Descriptions")
-    log("              GPB", "Ghost Press Blocked (always a short press)")
-    log("              SPA", "Short Press Allowed")
+    log("              LGPB", "Long Ghost Press Blocked")
+    log("              SGPB", "Short Ghost Press Blocked")
+    log("              LGRB", "Long Ghost Release Blocked")
+    log("              SGRB", "Short Ghost Release Blocked")
     log("              LPA", "Long Press Allowed")
+    log("              SPA", "Short Press Allowed")
+    log("              LRA", "Long Release Allowed")
+    log("              SRA", "Short Release Allowed")
 
 # Output VJoy configuration to log, to show Windows (GUIDs) <-> Joystick Gremlin (Vjoy IDs) assignment
 log("")
