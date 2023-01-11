@@ -2,9 +2,10 @@
 import threading
 import time
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
 from pprint import pformat
+from functools import partial
 # gremlin (user plugin) imports
 import gremlin
 from gremlin.user_plugin import *
@@ -191,8 +192,8 @@ class Device:
                 for btn in btns if type(btns) is list else [btns]:
                     # on this/these events(s) ("press"/"release")
                     for event in events if type(events) is list else [events]:
-                        # add the decorated function into the callbacks for this button and event
-                        self.settings.buttons.callbacks[event][btn].append(callback)
+                        # add the decorated function into the callbacks for this button and event and add self to callback
+                        self.settings.buttons.callbacks[event][btn].append(partial(callback, the_device=self))
 
         return wrap
 
@@ -872,17 +873,18 @@ for vjoy in vjoy_devices:
         )
         filtered_devices[int(vjoy_id)] = device
 
-        # Custom Callbacks
-        # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
+# Custom Callbacks
+# Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
+for vjoy_id, filtered_device in filtered_devices.items():
 
-        # Example:
-        # if name == "Stick":
-        #     @device.on_virtual_press(<button id>)
-        #     def custom_callback():
-        #         # do something here
+    # Example:
+    # if filtered_device.name == "Stick":
+    #     @device.on_virtual_press(<button id>)
+    #     def custom_callback(the_device):
+    #         # do something here
 
-        #     @device.on_virtual_release(<button id>)
-        #     def custom_callback():
-        #         # do something here
+    #     @filtered_device.on_virtual_release(<button id>)
+    #     def custom_callback(the_device):
+    #         # do something here
 
-        pass
+    pass
