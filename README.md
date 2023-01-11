@@ -32,7 +32,7 @@ You'll need a few programs installed and configured.
 
 1. Download ghost-input-filter.py
 2. Open Joystick Gremlin > Plugins tab
-3. Add plugin > ghost_input_filter.py
+3. Add plugin > ghost-input-filter.py
 4. Don't forget to **File > Save Profile**
 
 (For an in-depth rundown of the steps for these different programs, check out the [Installation Guide](https://github.com/high-the-memory/ghost-input-filter/wiki/Installation-Guide) wiki)
