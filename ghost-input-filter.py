@@ -51,22 +51,23 @@ class Device:
     def initialize_inputs(self, start_at_zero=False, first_time=False):
         # for each button on the device
         if self.settings.buttons.enabled:
-            self.initialize_buttons(False if start_at_zero else None, first_time)
+            self.initialize_buttons(initial_value=(False if start_at_zero is False else None), first_time=first_time)
 
         # for each axis on the device
         if self.settings.axes.enabled:
-            self.initialize_axes(0.0 if start_at_zero else None, first_time)
+            self.initialize_axes(initial_value=(0.0 if start_at_zero is False else None), first_time=first_time)
 
         # for each hat on the device
         if self.settings.hats.enabled:
-            self.initialize_hats((0, 0) if start_at_zero else None, first_time)
+            self.initialize_hats(initial_value=((0, 0) if start_at_zero is False else None), first_time=first_time)
 
-    def initialize_buttons(self, value=None, first_time=False):
+    def initialize_buttons(self, initial_value=None, first_time=False):
         if first_time:
             self.logger.log("        ... Initializing buttons on " + self.name)
         for btn in self.physical_device._buttons:
             if btn:
                 # initialize value (to off if explicitly set; otherwise, current value)
+                value = initial_value
                 try:
                     if value is None:
                         value = self.get_button(btn._index)
@@ -94,7 +95,7 @@ class Device:
                                     # wait the duration of the delay Wait Time, then check for ghost inputs
                             defer(self.settings.buttons.latency, self.filter_the_button, the_button, vjoy, joy)
 
-    def initialize_axes(self, value=None, first_time=False):
+    def initialize_axes(self, initial_value=None, first_time=False):
         if first_time:
             self.logger.log("        ... Initializing axes on " + self.name)
         # by default, axes don't seem to map 1:1, so make sure VJoy devices has all 8 axes(?)
@@ -110,6 +111,7 @@ class Device:
                 ])
 
                 # initialize value
+                value = initial_value
                 try:
                     if value is None:
                         value = self.get_axis(aid)
@@ -126,12 +128,13 @@ class Device:
                             vjoy[self.vjoy_id].axis(event.identifier).value = curve(
                                 event.value) if self.settings.axes.curve else event.value
 
-    def initialize_hats(self, value=None, first_time=False):
+    def initialize_hats(self, initial_value=None, first_time=False):
         if first_time:
             self.logger.log("        ... Initializing hats on " + self.name)
         for hat in self.physical_device._hats:
             if hat:
                 # initialize value
+                value = initial_value
                 try:
                     if value is None:
                         value = self.get_hat(hat._index)
@@ -193,7 +196,7 @@ class Device:
                     # on this/these events(s) ("press"/"release")
                     for event in events if type(events) is list else [events]:
                         # add the decorated function into the callbacks for this button and event and add self to callback
-                        self.settings.buttons.callbacks[event][btn].append(partial(callback, the_device=self))
+                        self.settings.buttons.callbacks[event][btn].append(callback)
 
         return wrap
 
@@ -873,6 +876,10 @@ for vjoy in vjoy_devices:
         )
         filtered_devices[int(vjoy_id)] = device
 
+
+# Custom Functions
+
+
 # Custom Callbacks
 # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
 for vjoy_id, filtered_device in filtered_devices.items():
@@ -880,11 +887,11 @@ for vjoy_id, filtered_device in filtered_devices.items():
     # Example:
     # if filtered_device.name == "Stick":
     #     @device.on_virtual_press(<button id>)
-    #     def custom_callback(the_device):
+    #     def custom_callback():
     #         # do something here
 
     #     @filtered_device.on_virtual_release(<button id>)
-    #     def custom_callback(the_device):
+    #     def custom_callback():
     #         # do something here
 
     pass
