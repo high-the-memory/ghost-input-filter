@@ -30,7 +30,7 @@ You'll need a few programs installed and configured.
 
 ### Installation
 
-1. Download ghost_input_filter.py
+1. Download ghost-input-filter.py
 2. Open Joystick Gremlin > Plugins tab
 3. Add plugin > ghost_input_filter.py
 4. Don't forget to **File > Save Profile**
