@@ -6,7 +6,7 @@ Python script for Joystick Gremlin that maps joystick buttons to virtual joystic
 
 Written for the Logitech X56 Hotas (but should work for any Hotas), wherein I was having issues with ghost inputs (random button inputs that I didn't press, sent to the game). Most posts online suggest plugging the hotas into the back of the computer--which I did--or getting a powered hub--which I got--in order to fix these issues--which it didn't.
 
-This python plugin for Joystick Gremlin will map all physical buttons on a given device to the same buttons on a vJoy device, EXCEPT where multiple buttons are detected at the same time within a configurable timespan (~50ms by default).
+This python plugin for Joystick Gremlin will map all physical buttons on a given device to the same buttons on a vJoy device, EXCEPT where multiple buttons are detected at the same time within a configurable timespan (~10ms by default).
 
 ## How It Works
 
@@ -22,8 +22,9 @@ You'll need a few programs installed and configured.
 
 ### Prerequisites
 
-* Logitech Drivers [https://support.logi.com/hc/en-us/articles/360024844133--Downloads-X56-Space-Flight-H-O-T-A-S-](https://support.logi.com/hc/en-us/articles/360024844133--Downloads-X56-Space-Flight-H-O-T-A-S-)
+* Logitech Drivers (Optional) [https://support.logi.com/hc/en-us/articles/360024844133--Downloads-X56-Space-Flight-H-O-T-A-S-](https://support.logi.com/hc/en-us/articles/360024844133--Downloads-X56-Space-Flight-H-O-T-A-S-)
     * First entry under **Windows 10**
+    * Optional, but likely better than the generic Windows drivers(?)
 * vJoy [https://github.com/jshafer817/vJoy.git](https://github.com/jshafer817/vJoy.git)
 * HidHide [https://github.com/ViGEm/HidHide.git](https://github.com/ViGEm/HidHide.git)
 * Joystick Gremlin [https://whitemagic.github.io/JoystickGremlin/](https://whitemagic.github.io/JoystickGremlin/)
