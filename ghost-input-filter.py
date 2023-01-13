@@ -212,12 +212,7 @@ class Logger:
 
         self.enabled = the_device.settings.logging
         self.summary_key = the_device.settings.summary_key
-        self.summary = {
-            'percentage': 0.0,
-            'start_time': time.localtime(),
-            'elapsed_time': 0.0,
-            'rate': 0.0
-        }
+        self.start_time = time.localtime()
 
         # log a summary every time summary button is pressed (user configurable)
         @gremlin.input_devices.keyboard(self.summary_key, the_device.mode)
@@ -259,32 +254,46 @@ class Logger:
             return
 
         totals = the_device.events.totals
-        complete = the_device.events.complete
+        inputs = {}
+        events = {}
 
-        total = totals['buttons']['blocked']['total'] + totals['buttons']['allowed']['total']
-        self.summary['percentage'] = (totals['buttons']['blocked'][
-                                          'total'] / total) * 100 if total > 0 else 0.0  # !div/0
-        self.summary['elapsed_time'] = time.mktime(time.localtime()) - time.mktime(self.summary['start_time'])
-        self.summary['per_minute'] = (totals['buttons']['blocked']['total'] / self.summary['elapsed_time']) * 60
-        self.summary['per_hour'] = self.summary['per_minute'] * 60
+        inputs['total'] = totals['buttons']['blocked']['total'] + totals['buttons']['allowed']['total']
+        events['total'] = totals['events']['blocked']['total'] + totals['events']['allowed']['total'] + \
+                          totals['events']['mixed']['total']
+
+        inputs['percentage'] = (totals['buttons']['blocked']['total'] / inputs['total']) * 100 \
+            if inputs['total'] > 0 else 0.0  # !div/0
+        events['percentage'] = ((totals['events']['blocked']['total'] + totals['events']['mixed'][
+            'total']) / events['total']) * 100 \
+            if events['total'] > 0 else 0.0  # !div/0
+        elapsed_time = time.mktime(time.localtime()) - time.mktime(self.start_time)
+        inputs['per_minute'] = (totals['buttons']['blocked']['total'] / elapsed_time) * 60
+        inputs['per_hour'] = inputs['per_minute'] * 60
+        events['per_minute'] = ((totals['events']['blocked']['total'] + totals['events']['mixed']['total']) / elapsed_time) * 60
+        events['per_hour'] = events['per_minute'] * 60
 
         # output a summary
         log("")
         log("//////////////////////////////////////////////////////////////////")
         log("   Summary for \"" + the_device.name + "\"", "on Profile [" + the_device.mode + "]")
-        log("   |      Total Inputs Allowed", str(totals['buttons']['allowed']['total']))
-        log("   |      Total Ghost Inputs Blocked", str(totals['buttons']['blocked']['total']))
+        log("   |      Elapsed Time", str(elapsed_time) + " seconds" + "   (" + str(
+            round(elapsed_time / 60, 1)) + " minutes)    (" + str(
+            round(elapsed_time / 3600, 1)) + " hours)")
         log("   | ")
-        log("   |      Total Allowed Events", str(totals['events']['allowed']['total']))
-        log("   |      Total Blocked Events", str(totals['events']['blocked']['total']))
-        log("   |      Total Mixed Events", str(totals['events']['mixed']['total']))
+        log("   |      Inputs       (Individual button press events)")
+        log("   |            Total Allowed", str(totals['buttons']['allowed']['total']))
+        log("   |            Total Blocked", str(totals['buttons']['blocked']['total']))
+        log("   |            Ghosting %", str(round(inputs['percentage'], 3)) + "%")
+        log("   |            Ghost Block rate", str(round(inputs['per_minute'], 3)) + "/min   (" + str(
+            round(inputs['per_hour'])) + "/hr)")
         log("   | ")
-        log("   |      Elapsed Time", str(self.summary['elapsed_time']) + " seconds" + "   (" + str(
-            round(self.summary['elapsed_time'] / 60, 1)) + " minutes)    (" + str(
-            round(self.summary['elapsed_time'] / 3600, 1)) + " hours)")
-        log("   |      Ghosting %", str(round(self.summary['percentage'], 3)) + "%")
-        log("   |      Ghost Block rate", str(round(self.summary['per_minute'], 3)) + "/min   (" + str(
-            round(self.summary['per_hour'])) + "/hr)")
+        log("   |      Events     (Grouped button presses that happened together)")
+        log("   |            Total Allowed", str(totals['events']['allowed']['total']))
+        log("   |            Total Blocked", str(totals['events']['blocked']['total']))
+        log("   |            Total Mixed", str(totals['events']['mixed']['total']))
+        log("   |            Ghosting %", str(round(events['percentage'], 3)) + "%")
+        log("   |            Ghost Block rate", str(round(events['per_minute'], 3)) + "/min   (" + str(
+            round(events['per_hour'])) + "/hr)")
 
         for event_type in ["blocked", "allowed"]:
             if totals['buttons'][event_type]['total'] > 0:
@@ -305,16 +314,8 @@ class Logger:
                 # output which combinations of buttons were pressed at the same time, starting with the most common
                 output_the_data(totals['events'], event_type, 'by_combination')
 
-                # if event_type == "allowed" and the_device.settings.debug:
-                #     log("   | ")
-                #     if complete.has_events():
-                #         log("   |      Allowed Events (since last summary)")
-                #         complete.flush_events(the_device)
-                #     else:
-                #         log("   |      No new Allowed Events since last summary")
 
     def log(self, *args, **kwargs):
-
         if not self.enabled:
             return
 
@@ -876,14 +877,12 @@ for vjoy in vjoy_devices:
         )
         filtered_devices[int(vjoy_id)] = device
 
-
 # Custom Functions
 
 
 # Custom Callbacks
 # Add any custom callback functions here, for events you want to happen IF a virtual input is successfully pressed
 for vjoy_id, filtered_device in filtered_devices.items():
-
     # Example:
     # if filtered_device.name == "Stick":
     #     @device.on_virtual_press(<button id>)
